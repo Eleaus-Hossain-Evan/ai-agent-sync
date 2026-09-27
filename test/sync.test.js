@@ -1,0 +1,169 @@
+import { test, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { BUILTIN_AGENTS } from '../src/agents.js';
+import { detectAgents, discoverAgents } from '../src/scan.js';
+import { planItem, applyItem } from '../src/sync.js';
+import { readToolsConf, mergeAgents, addToToolsConf, readIgnore, addToIgnore } from '../src/store.js';
+import { findDropbox, sharedRoot } from '../src/dropbox.js';
+import { expand, tilde } from '../src/paths.js';
+
+let base, A, B, root;
+
+const write = (p, text = '') => {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, text);
+};
+const read = (p) => fs.readFileSync(p, 'utf8');
+const isLink = (p) => fs.lstatSync(p).isSymbolicLink();
+
+// Runs one Mac's sync for the given agent ids, answering yes to everything.
+function run(h, role, ids, agents = BUILTIN_AGENTS) {
+  const found = detectAgents(agents, root, h).filter((a) => ids.includes(a.id));
+  const actions = [];
+  for (const a of found) {
+    for (const it of a.items) {
+      const action = planItem(role, it);
+      actions.push(`${a.id}:${path.basename(it.local)}:${action}`);
+      applyItem(action, it, 'TS');
+    }
+  }
+  return actions;
+}
+
+beforeEach(() => {
+  base = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-agent-sync-'));
+  A = path.join(base, 'macA');
+  B = path.join(base, 'macB');
+  const dropbox = path.join(base, 'Dropbox');
+  fs.mkdirSync(dropbox);
+  for (const h of [A, B]) {
+    fs.mkdirSync(h);
+    fs.symlinkSync(dropbox, path.join(h, 'Dropbox'));
+  }
+  root = sharedRoot(dropbox);
+});
+
+test('primary moves items into per-agent folders and links them back', () => {
+  write(`${A}/.claude/CLAUDE.md`, 'rules A');
+  write(`${A}/.claude/skills/s1/SKILL.md`, 'skill');
+  write(`${A}/.gemini/GEMINI.md`, 'gem A');
+
+  const actions = run(A, 'primary', ['claude', 'gemini']);
+  assert.deepEqual(actions, ['claude:CLAUDE.md:move', 'claude:skills:move', 'gemini:GEMINI.md:move']);
+  assert.equal(read(`${root}/claude/CLAUDE.md`), 'rules A');
+  assert.ok(fs.existsSync(`${root}/claude/skills/s1/SKILL.md`));
+  assert.equal(read(`${root}/gemini/GEMINI.md`), 'gem A');
+  assert.ok(isLink(`${A}/.claude/CLAUDE.md`) && isLink(`${A}/.claude/skills`));
+  assert.equal(read(`${A}/.gemini/GEMINI.md`), 'gem A');
+});
+
+test('primary creates missing items and never overwrites Dropbox', () => {
+  fs.mkdirSync(`${A}/.codeium/windsurf`, { recursive: true });
+  assert.deepEqual(run(A, 'primary', ['windsurf']), ['windsurf:global_rules.md:create', 'windsurf:global_workflows:create']);
+  assert.equal(read(`${A}/.codeium/windsurf/memories/global_rules.md`), '');
+
+  write(`${B}/.gemini/GEMINI.md`, 'gem B');
+  write(`${root}/gemini/GEMINI.md`, 'already there');
+  assert.deepEqual(run(B, 'primary', ['gemini']), ['gemini:GEMINI.md:conflict']);
+  assert.equal(read(`${B}/.gemini/GEMINI.md`), 'gem B');
+  assert.equal(read(`${root}/gemini/GEMINI.md`), 'already there');
+});
+
+test('secondary backs up real copies, links, and uploads local-only items', () => {
+  write(`${A}/.claude/CLAUDE.md`, 'rules A');
+  run(A, 'primary', ['claude']);
+
+  write(`${B}/.claude/CLAUDE.md`, 'rules B');
+  write(`${B}/.codex/AGENTS.md`, 'codex B');
+  const actions = run(B, 'secondary', ['claude', 'codex']);
+  assert.deepEqual(actions, ['claude:CLAUDE.md:replace', 'claude:skills:link', 'codex:AGENTS.md:upload']);
+  assert.equal(read(`${B}/.claude/CLAUDE.md`), 'rules A');
+  assert.equal(read(`${B}/.claude/CLAUDE.md.bak-TS`), 'rules B');
+  assert.equal(read(`${root}/codex/AGENTS.md`), 'codex B');
+  assert.ok(isLink(`${B}/.codex/AGENTS.md`));
+});
+
+test('re-running is idempotent and never nests skills/skills', () => {
+  write(`${A}/.claude/skills/s1/SKILL.md`, 'skill');
+  run(A, 'primary', ['claude']);
+  assert.deepEqual(run(A, 'primary', ['claude']), ['claude:CLAUDE.md:ok', 'claude:skills:ok']);
+  fs.mkdirSync(`${B}/.claude`);
+  assert.deepEqual(run(B, 'secondary', ['claude']), ['claude:CLAUDE.md:link', 'claude:skills:link']);
+  assert.deepEqual(run(B, 'secondary', ['claude']), ['claude:CLAUDE.md:ok', 'claude:skills:ok']);
+  assert.ok(!fs.existsSync(`${root}/claude/skills/skills`));
+  assert.ok(detectAgents(BUILTIN_AGENTS, root, B).find((a) => a.id === 'claude').synced);
+});
+
+test('discovery finds unlisted agents and skips known, ignored and noise folders', () => {
+  write(`${A}/.newagent/AGENTS.md`, 'x');
+  write(`${A}/.config/otheragent/rules/r.md`, 'x');
+  write(`${A}/.shorebird/CLAUDE.md`, 'x');
+  write(`${A}/.gemini/GEMINI.md`, 'x'); // registry
+  write(`${A}/.claude/CLAUDE.md`, 'x'); // registry
+  write(`${A}/.npm/AGENTS.md`, 'x'); // noise
+  write(`${A}/.plain/README.md`, 'x'); // not instructions
+  write(`${A}/Library/Application Support/SomeAgent/prompts/p.md`, 'x');
+  write(`${A}/Library/Application Support/com.apple.Thing/rules/r.md`, 'x'); // protected
+
+  const ignored = new Set(['~/.shorebird']);
+  const found = discoverAgents(BUILTIN_AGENTS, ignored, A);
+  assert.deepEqual(found.map((a) => a.detect[0]).sort(), [
+    '~/.config/otheragent',
+    '~/.newagent',
+    '~/Library/Application Support/SomeAgent',
+  ]);
+  const na = found.find((a) => a.id === 'newagent');
+  assert.deepEqual(na.items, [{ path: '~/.newagent/AGENTS.md', kind: 'file' }]);
+});
+
+test('tools.conf round-trip: discovered agent syncs on both Macs', () => {
+  write(`${A}/.newagent/AGENTS.md`, 'new A');
+  const conf = `${root}/tools.conf`;
+  const [na] = discoverAgents(BUILTIN_AGENTS, new Set(), A);
+  addToToolsConf(conf, na);
+  addToToolsConf(conf, na); // no duplicate lines
+  assert.equal(read(conf).split('\n').filter((l) => l.startsWith('newagent|')).length, 1);
+
+  const agents = mergeAgents(BUILTIN_AGENTS, readToolsConf(conf));
+  run(A, 'primary', ['newagent'], agents);
+  assert.equal(read(`${root}/newagent/AGENTS.md`), 'new A');
+
+  // Mac B has the agent folder but a different username/home: ~ paths expand there.
+  write(`${B}/.newagent/AGENTS.md`, 'new B');
+  assert.deepEqual(discoverAgents(agents, new Set(), B), []); // known via tools.conf
+  run(B, 'secondary', ['newagent'], agents);
+  assert.equal(read(`${B}/.newagent/AGENTS.md`), 'new A');
+});
+
+test('reads tools.conf written by the v3 bash script', () => {
+  write(
+    `${root}/tools.conf`,
+    '# header\nnewagent|newagent|~/.newagent|~/.newagent/AGENTS.md|file\ngemini|My Gemini|~/.gemini|~/.gemini/GEMINI.md|file\n',
+  );
+  const agents = mergeAgents(BUILTIN_AGENTS, readToolsConf(`${root}/tools.conf`));
+  assert.equal(agents.filter((a) => a.id === 'gemini').length, 1);
+  assert.equal(agents.find((a) => a.id === 'gemini').name, 'My Gemini');
+  assert.ok(agents.some((a) => a.id === 'newagent'));
+});
+
+test('tools.ignore and path helpers', () => {
+  addToIgnore(`${root}/tools.ignore`, ['~/.shorebird']);
+  addToIgnore(`${root}/tools.ignore`, ['~/.shorebird']);
+  assert.deepEqual([...readIgnore(`${root}/tools.ignore`)], ['~/.shorebird']);
+  assert.equal(expand('~/.x', A), `${A}/.x`);
+  assert.equal(tilde(`${A}/.x`, A), '~/.x');
+});
+
+test('findDropbox prefers info.json, then CloudStorage, then ~/Dropbox', () => {
+  assert.equal(findDropbox(A), path.join(A, 'Dropbox'));
+  fs.mkdirSync(`${A}/Library/CloudStorage/Dropbox`, { recursive: true });
+  assert.equal(findDropbox(A), `${A}/Library/CloudStorage/Dropbox`);
+  const custom = path.join(base, 'Custom Dropbox');
+  fs.mkdirSync(custom);
+  write(`${A}/.dropbox/info.json`, JSON.stringify({ personal: { path: custom } }));
+  assert.equal(findDropbox(A), custom);
+});

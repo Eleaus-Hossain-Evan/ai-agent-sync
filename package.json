@@ -1,0 +1,52 @@
+{
+  "name": "ai-agent-sync",
+  "version": "0.1.0",
+  "description": "Sync the global rules and skills of every AI coding agent (Claude Code, Cursor, Codex, Gemini, OpenCode, Windsurf, Copilot…) between Macs through Dropbox.",
+  "author": "Eleaus Hossain Evan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eleaus-Hossain-Evan/ai-agent-sync.git"
+  },
+  "homepage": "https://github.com/Eleaus-Hossain-Evan/ai-agent-sync#readme",
+  "bugs": {
+    "url": "https://github.com/Eleaus-Hossain-Evan/ai-agent-sync/issues"
+  },
+  "type": "module",
+  "bin": {
+    "ai-agent-sync": "bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin"
+  ],
+  "keywords": [
+    "ai",
+    "agents",
+    "claude-code",
+    "cursor",
+    "codex",
+    "gemini",
+    "opencode",
+    "windsurf",
+    "copilot",
+    "skills",
+    "dropbox",
+    "sync",
+    "dotfiles",
+    "cli"
+  ],
+  "dependencies": {
+    "@clack/prompts": "^1.8.1",
+    "picocolors": "^1.1.1"
+  }
+}
