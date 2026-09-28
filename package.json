@@ -1,6 +1,6 @@
 {
   "name": "ai-agent-sync",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Sync the global rules and skills of every AI coding agent (Claude Code, Cursor, Codex, Gemini, OpenCode, Windsurf, Copilot…) between Macs through Dropbox.",
   "author": "Eleaus Hossain Evan",
   "license": "MIT",

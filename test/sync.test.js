@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { BUILTIN_AGENTS } from '../src/agents.js';
 import { detectAgents, discoverAgents } from '../src/scan.js';
-import { planItem, applyItem } from '../src/sync.js';
+import { planItem, applyItem, planUnlink, unlinkItem } from '../src/sync.js';
 import { readToolsConf, mergeAgents, addToToolsConf, readIgnore, addToIgnore } from '../src/store.js';
 import { findDropbox, sharedRoot } from '../src/dropbox.js';
 import { expand, tilde } from '../src/paths.js';
@@ -166,4 +166,62 @@ test('findDropbox prefers info.json, then CloudStorage, then ~/Dropbox', () => {
   fs.mkdirSync(custom);
   write(`${A}/.dropbox/info.json`, JSON.stringify({ personal: { path: custom } }));
   assert.equal(findDropbox(A), custom);
+});
+
+// Unlinks the given agents on one Mac; returns "id:basename:action" lines.
+function unlink(h, ids, agents = BUILTIN_AGENTS) {
+  const out = [];
+  for (const a of detectAgents(agents, root, h).filter((x) => ids.includes(x.id))) {
+    for (const it of a.items) {
+      const action = planUnlink(it);
+      out.push(`${a.id}:${path.basename(it.local)}:${action}`);
+      if (action === 'restore') unlinkItem(it);
+    }
+  }
+  return out;
+}
+
+test('unlink restores real files and dirs and keeps the Dropbox copy', () => {
+  write(`${A}/.claude/CLAUDE.md`, 'rules A');
+  write(`${A}/.claude/skills/s1/SKILL.md`, 'skill');
+  run(A, 'primary', ['claude']);
+
+  assert.deepEqual(unlink(A, ['claude']), ['claude:CLAUDE.md:restore', 'claude:skills:restore']);
+  assert.ok(!isLink(`${A}/.claude/CLAUDE.md`) && !isLink(`${A}/.claude/skills`));
+  assert.equal(read(`${A}/.claude/CLAUDE.md`), 'rules A');
+  assert.equal(read(`${A}/.claude/skills/s1/SKILL.md`), 'skill');
+  assert.equal(read(`${root}/claude/CLAUDE.md`), 'rules A');
+  assert.deepEqual(fs.readdirSync(`${A}/.claude`).sort(), ['CLAUDE.md', 'skills']); // no tmp/oldlink leftovers
+
+  // Edits after unlinking stay local.
+  write(`${A}/.claude/CLAUDE.md`, 'local only');
+  assert.equal(read(`${root}/claude/CLAUDE.md`), 'rules A');
+});
+
+test('unlink leaves broken and non-linked items alone', () => {
+  write(`${A}/.claude/CLAUDE.md`, 'rules A');
+  run(A, 'primary', ['claude']); // skills created empty in Dropbox + linked
+  fs.rmSync(`${root}/claude/skills`, { recursive: true }); // Dropbox copy gone -> broken link
+  write(`${A}/.gemini/GEMINI.md`, 'real, never synced');
+
+  assert.deepEqual(unlink(A, ['claude', 'gemini']), [
+    'claude:CLAUDE.md:restore',
+    'claude:skills:broken',
+    'gemini:GEMINI.md:not-linked',
+  ]);
+  assert.ok(isLink(`${A}/.claude/skills`)); // untouched
+  assert.equal(read(`${A}/.gemini/GEMINI.md`), 'real, never synced');
+});
+
+test('sync -> unlink -> sync round-trip on both Macs', () => {
+  write(`${A}/.gemini/GEMINI.md`, 'gem');
+  run(A, 'primary', ['gemini']);
+  fs.mkdirSync(`${B}/.gemini`);
+  run(B, 'secondary', ['gemini']);
+  assert.deepEqual(unlink(B, ['gemini']), ['gemini:GEMINI.md:restore']);
+  assert.equal(read(`${B}/.gemini/GEMINI.md`), 'gem');
+  // Mac A is unaffected; re-syncing B backs up its real copy and links again.
+  assert.ok(isLink(`${A}/.gemini/GEMINI.md`));
+  assert.deepEqual(run(B, 'secondary', ['gemini']), ['gemini:GEMINI.md:replace']);
+  assert.ok(isLink(`${B}/.gemini/GEMINI.md`));
 });

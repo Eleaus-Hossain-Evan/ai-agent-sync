@@ -87,6 +87,43 @@ function move(from, to) {
   }
 }
 
+// Unlink: what happens to one item.
+//   restore     linked, Dropbox copy exists -> replace the link with a real copy
+//   broken      linked, but the Dropbox copy is missing -> left alone
+//   not-linked  real, missing or linked elsewhere -> left alone
+export function planUnlink(item) {
+  if (item.state !== 'linked') return 'not-linked';
+  return exists(item.shared) ? 'restore' : 'broken';
+}
+
+export const UNLINK_TEXT = {
+  restore: 'restore a real copy from Dropbox',
+  broken: 'Dropbox copy is missing, left alone',
+  'not-linked': 'not linked, left alone',
+};
+
+// Replaces the symlink at item.local with a real copy of the Dropbox item.
+// The copy is made first and the link is only moved aside, so a failure at
+// any step leaves the original link in place.
+export function unlinkItem(item) {
+  const { local, shared } = item;
+  const tmp = `${local}.ai-agent-sync-restore`;
+  const oldLink = `${local}.ai-agent-sync-oldlink`;
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.cpSync(shared, tmp, { recursive: true, preserveTimestamps: true });
+  // A directory can't be renamed over a symlink, so move the link aside first.
+  fs.rmSync(oldLink, { force: true });
+  fs.renameSync(local, oldLink);
+  try {
+    fs.renameSync(tmp, local);
+  } catch (err) {
+    fs.renameSync(oldLink, local);
+    fs.rmSync(tmp, { recursive: true, force: true });
+    throw err;
+  }
+  fs.rmSync(oldLink, { force: true });
+}
+
 // Performs one planned action. Returns the backup path for 'replace'.
 export function applyItem(action, item, ts = timestamp()) {
   const { local, shared, kind } = item;

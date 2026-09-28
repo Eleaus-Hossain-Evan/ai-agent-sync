@@ -94,6 +94,21 @@ Settings and MCP files (`settings.json`, `mcp.json`, `opencode.json`, `config.to
 
 If Claude is synced, `~/.claude/check-dropbox-conflicts.sh` is installed. Add the `SessionStart` hook the CLI prints, and Claude will tell you whenever Dropbox creates a *conflicted copy* of your config.
 
+## Unlink
+
+Changed your mind about an agent? Unlink it:
+
+```sh
+npx ai-agent-sync unlink
+```
+
+- Pick the agents to unlink from a checklist (all unchecked by default) and review the plan first.
+- Each symlink is replaced by a **real copy** of the Dropbox file or folder, so the agent keeps working with the same content, now local-only.
+- Afterwards you're asked whether to also delete those agents' folders from Dropbox. The default is **No**, because your other Mac may still use them. If you say yes, the other Mac's links for those agents break until you unlink them there too. Dropbox keeps deleted files recoverable for a while.
+- `--dry-run` shows the plan without changing anything.
+
+To sync again later, just run `npx ai-agent-sync`.
+
 ## Supported agents
 
 | Agent | Synced |
