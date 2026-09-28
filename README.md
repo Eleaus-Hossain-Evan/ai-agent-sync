@@ -1,5 +1,8 @@
 # ai-agent-sync
 
+[![npm version](https://img.shields.io/npm/v/ai-agent-sync)](https://www.npmjs.com/package/ai-agent-sync)
+[![npm downloads](https://img.shields.io/npm/dm/ai-agent-sync)](https://www.npmjs.com/package/ai-agent-sync)
+
 Keep the global rules and skills of **every AI coding agent** in sync between your devices, through Dropbox.
 
 ```sh
