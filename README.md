@@ -142,6 +142,8 @@ npm test                    # node:test, temp home folders, no real files touche
 node bin/cli.js --dry-run
 ```
 
+The demo GIF and the LinkedIn video are generated from a real run: see [`scripts/demo`](scripts/demo/README.md).
+
 ## License
 
 MIT
