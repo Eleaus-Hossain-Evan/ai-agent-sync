@@ -109,6 +109,21 @@ npx ai-agent-sync unlink
 
 To sync again later, just run `npx ai-agent-sync`.
 
+## Status
+
+Check what's going on without changing anything:
+
+```sh
+npx ai-agent-sync status
+```
+
+- Every detected agent is shown as **synced**, **partly synced**, **broken** (linked, but the Dropbox copy is gone) or **not synced**, with details for anything that's wrong.
+- **In Dropbox, not linked on this Mac** lists agents synced from your other Mac that this one doesn't use yet.
+- Any Dropbox *conflicted copy* files are listed.
+- If Claude is synced, it checks that the conflict hook is set up.
+
+The command exits with code `1` when something is broken or conflicted, so you can use it in scripts.
+
 ## Supported agents
 
 | Agent | Synced |

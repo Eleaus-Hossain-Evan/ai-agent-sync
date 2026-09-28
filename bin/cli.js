@@ -10,7 +10,8 @@ import { findDropbox, sharedRoot, SHARED_DIR_NAME, DROPBOX_INSTALL_URL } from '.
 import { readToolsConf, mergeAgents, readIgnore, addToToolsConf, addToIgnore } from '../src/store.js';
 import { detectAgents, discoverAgents } from '../src/scan.js';
 import { planItem, applyItem, diffItem, timestamp, ACTION_TEXT, CHANGES, planUnlink, unlinkItem, UNLINK_TEXT } from '../src/sync.js';
-import { installChecker, hookInstalled, HOOK_SNIPPET } from '../src/checker.js';
+import { installChecker, hookInstalled, checkerPath, HOOK_SNIPPET } from '../src/checker.js';
+import { computeStatus } from '../src/status.js';
 import { tilde, exists } from '../src/paths.js';
 import { banner, guard, truncate, actionColor, compactPaths } from '../src/ui.js';
 
@@ -30,6 +31,7 @@ through Dropbox. Run it on each Mac: once as Primary, then as Secondary.
 Usage:
   npx ai-agent-sync [--dry-run]          Sync agents through Dropbox
   npx ai-agent-sync unlink [--dry-run]   Restore real files on this Mac
+  npx ai-agent-sync status               Show what is synced, broken or conflicted
 
 Options:
   --dry-run   Scan and show the plan without changing anything
@@ -39,7 +41,13 @@ Options:
 }
 const dryRun = args.includes('--dry-run');
 
-if (!process.stdin.isTTY || !process.stdout.isTTY) {
+const command = args[0] && !args[0].startsWith('-') ? args[0] : 'sync';
+if (!['sync', 'unlink', 'status'].includes(command)) {
+  console.error(`Unknown command "${command}". Run ai-agent-sync --help.`);
+  process.exit(1);
+}
+// status only reports, so it also works in scripts and CI logs.
+if (command !== 'status' && (!process.stdin.isTTY || !process.stdout.isTTY)) {
   console.error('ai-agent-sync is interactive. Run it in a terminal.');
   process.exit(1);
 }
@@ -54,7 +62,8 @@ const WAIT_SECONDS = 300;
 const paths = (items) => pc.dim(`(${compactPaths(items.map((i) => tilde(i.local ?? i.path)))})`);
 
 // Shared start of every command: banner, Dropbox, registry + tools.conf.
-function setup(s) {
+// Without a spinner (status), progress lines are simply not shown.
+function setup(s = { start() {}, stop() {}, error() {} }) {
   banner(pkg.version, dryRun);
   s.start('Looking for Dropbox');
   const dropbox = findDropbox();
@@ -85,6 +94,8 @@ async function main() {
   );
 
   if (synced.length) p.note(synced.map((a) => `${pc.green('✔')} ${a.name}`).join('\n'), 'Already synced');
+  // Keep the Claude conflict checker in place whenever Claude is synced.
+  if (!dryRun && synced.some((a) => a.id === 'claude')) installChecker(root);
   if (!pending.length && !discovered.length) {
     p.outro('Everything on this Mac is already synced.');
     return;
@@ -358,7 +369,80 @@ async function unlinkMain() {
   p.outro(`Done. Run ${pc.cyan('npx ai-agent-sync')} any time to sync again.`);
 }
 
-(args[0] === 'unlink' ? unlinkMain : main)().catch((err) => {
+// `status`: read-only report. Exit code 1 when something is broken or conflicted.
+async function statusMain() {
+  const { root, agents } = setup();
+  p.log.info(`Dropbox: ${pc.dim(tilde(root))}`);
+  const st = computeStatus(agents, root);
+
+  const ICON = { synced: pc.green('✔'), partial: pc.yellow('◐'), broken: pc.red('✖'), off: pc.dim('○') };
+  const LABEL = {
+    synced: pc.green('synced'),
+    partial: pc.yellow('partly synced'),
+    broken: pc.red('broken'),
+    off: pc.dim('not synced'),
+  };
+  const ITEM = {
+    broken: pc.red('linked, but the Dropbox copy is missing'),
+    elsewhere: pc.yellow('symlink to somewhere else'),
+    local: pc.dim('local only'),
+    missing: pc.dim('missing'),
+  };
+  if (st.agents.length) {
+    const nameWidth = Math.max(...st.agents.map((a) => a.name.length));
+    const shown = st.agents.filter((a) => a.health === 'partial' || a.health === 'broken').flatMap((a) => a.items.filter((i) => i.health !== 'ok'));
+    const itemWidth = Math.max(0, ...shown.map((i) => tilde(i.local).length));
+    const lines = st.agents.map((a) => {
+      let line = `${ICON[a.health]} ${a.name.padEnd(nameWidth)}  ${LABEL[a.health]}`;
+      if (a.health === 'partial' || a.health === 'broken') {
+        for (const it of a.items.filter((i) => i.health !== 'ok')) {
+          line += `\n    ${tilde(it.local).padEnd(itemWidth)}  ${ITEM[it.health]}`;
+        }
+      }
+      return line;
+    });
+    p.note(lines.join('\n'), 'Agents on this Mac');
+  } else {
+    p.log.info('No known AI agents found on this Mac.');
+  }
+
+  if (st.notLinkedHere.length) {
+    p.note(
+      `${st.notLinkedHere.map((id) => `${SHARED_DIR_NAME}/${id}`).join('\n')}\n\n${pc.dim(`Run ${pc.cyan('npx ai-agent-sync')} as Secondary to link them here.`)}`,
+      'In Dropbox, not linked on this Mac',
+    );
+  }
+
+  if (st.conflicts.length) {
+    p.log.error(`Dropbox conflicted copies:\n${st.conflicts.map((c) => tilde(c)).join('\n')}`);
+  } else if (st.rootExists) {
+    p.log.success('No Dropbox conflicts');
+  }
+
+  const claude = st.agents.find((a) => a.id === 'claude');
+  if (claude && claude.health !== 'off') {
+    const script = fs.existsSync(checkerPath());
+    if (script && hookInstalled()) p.log.success('Claude conflict hook is set up');
+    else if (!script) p.log.warn(`Claude conflict checker ${tilde(checkerPath())} is missing. Run ${pc.cyan('npx ai-agent-sync')} to reinstall it.`);
+    else p.note(`Add this to ~/.claude/settings.json so Claude warns about Dropbox conflicts:\n\n${HOOK_SNIPPET}`, 'Claude conflict hook is not set up');
+  }
+
+  const broken = st.agents.filter((a) => a.health === 'broken').length;
+  const problems = broken + (st.conflicts.length ? 1 : 0);
+  if (!st.rootExists) {
+    p.outro(`Nothing synced yet. Run ${pc.cyan('npx ai-agent-sync')} to start.`);
+  } else if (problems) {
+    p.outro(
+      pc.red(`${problems} problem${problems === 1 ? '' : 's'} found.`) +
+        (broken ? ` Run ${pc.cyan('npx ai-agent-sync')} to relink, or ${pc.cyan('unlink')} to restore local files.` : ''),
+    );
+    process.exitCode = 1;
+  } else {
+    p.outro('All good.');
+  }
+}
+
+({ sync: main, unlink: unlinkMain, status: statusMain })[command]().catch((err) => {
   p.log.error(err.stack || String(err));
   process.exit(1);
 });

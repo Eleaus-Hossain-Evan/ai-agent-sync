@@ -9,6 +9,7 @@ import { detectAgents, discoverAgents } from '../src/scan.js';
 import { planItem, applyItem, planUnlink, unlinkItem } from '../src/sync.js';
 import { readToolsConf, mergeAgents, addToToolsConf, readIgnore, addToIgnore } from '../src/store.js';
 import { findDropbox, sharedRoot } from '../src/dropbox.js';
+import { computeStatus } from '../src/status.js';
 import { expand, tilde } from '../src/paths.js';
 
 let base, A, B, root;
@@ -224,4 +225,40 @@ test('sync -> unlink -> sync round-trip on both Macs', () => {
   assert.ok(isLink(`${A}/.gemini/GEMINI.md`));
   assert.deepEqual(run(B, 'secondary', ['gemini']), ['gemini:GEMINI.md:replace']);
   assert.ok(isLink(`${B}/.gemini/GEMINI.md`));
+});
+
+test('status reports synced, partial, broken and unsynced agents', () => {
+  write(`${A}/.claude/CLAUDE.md`, 'rules');
+  run(A, 'primary', ['claude', 'windsurf']); // windsurf not installed -> skipped
+  fs.mkdirSync(`${A}/.cursor/skills`, { recursive: true });
+  run(A, 'primary', ['cursor']);
+  fs.rmSync(`${A}/.cursor/agents`); // unlink one Cursor item -> partial
+  write(`${A}/.gemini/GEMINI.md`, 'local');
+  run(A, 'primary', ['gemini']);
+  fs.rmSync(`${root}/gemini/GEMINI.md`); // Dropbox copy gone -> broken
+  write(`${A}/.codex/AGENTS.md`, 'never synced');
+
+  const st = computeStatus(BUILTIN_AGENTS, root, A);
+  const health = Object.fromEntries(st.agents.map((a) => [a.id, a.health]));
+  assert.equal(health.claude, 'synced');
+  assert.equal(health.cursor, 'partial');
+  assert.equal(health.gemini, 'broken');
+  assert.equal(health.codex, 'off');
+  assert.equal(st.agents.find((a) => a.id === 'gemini').items[0].health, 'broken');
+  assert.deepEqual(st.conflicts, []);
+});
+
+test('status lists Dropbox agents not linked here and conflicted copies', () => {
+  write(`${A}/.codex/AGENTS.md`, 'codex');
+  run(A, 'primary', ['codex']);
+  write(`${root}/codex/AGENTS (Evan's conflicted copy 2026-09-29).md`, 'x');
+
+  const st = computeStatus(BUILTIN_AGENTS, root, B); // Mac B: codex not installed/linked
+  assert.deepEqual(st.notLinkedHere, ['codex']);
+  assert.equal(st.conflicts.length, 1);
+  assert.match(st.conflicts[0], /conflicted copy/);
+
+  const none = computeStatus(BUILTIN_AGENTS, path.join(base, 'no-such-root'), A);
+  assert.equal(none.rootExists, false);
+  assert.deepEqual(none.notLinkedHere, []);
 });
