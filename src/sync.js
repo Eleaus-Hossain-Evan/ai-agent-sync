@@ -1,50 +1,43 @@
-// Per-item sync, same rules as the v3 bash script.
+// Per-item sync. The Dropbox copy always wins; this Mac's copy is backed up
+// before it's replaced. Items Dropbox doesn't have can be uploaded.
 //
-// Primary (this Mac has the real files):
-//   real item, nothing in Dropbox  -> move it into Dropbox, link it back
-//   real item, Dropbox has a copy  -> skip with a warning (never overwrite)
-//   missing everywhere             -> create an empty one in Dropbox, link it
-// Secondary (link to the Dropbox copies):
-//   real item, Dropbox has a copy  -> show diff, confirm, back up, link
-//   real item, nothing in Dropbox  -> offer to move this Mac's copy in
-//   missing locally                -> link to the Dropbox copy
+//   local \ Dropbox      has a copy                 no copy
+//   already linked       ok                         ok
+//   real file/folder     replace (back up + link)   upload (move in + link)
+//   missing              link                       skip
+//   symlink elsewhere    relink                     leave
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { exists } from './paths.js';
 
-export function planItem(role, item) {
+export function planItem(item) {
   const inDropbox = exists(item.shared);
   switch (item.state) {
     case 'linked':
       return 'ok';
     case 'link':
-      if (role === 'primary') return 'leave';
-      return inDropbox ? 'relink' : 'wait';
+      return inDropbox ? 'relink' : 'leave';
     case 'real':
-      if (role === 'primary') return inDropbox ? 'conflict' : 'move';
       return inDropbox ? 'replace' : 'upload';
     default:
-      if (inDropbox) return 'link';
-      return role === 'primary' ? 'create' : 'wait';
+      return inDropbox ? 'link' : 'skip';
   }
 }
 
 export const ACTION_TEXT = {
   ok: 'already linked',
-  leave: 'is a symlink to somewhere else, left alone',
-  conflict: 'Dropbox already has a copy, skipped (run as Secondary on this Mac to use it)',
-  move: 'move into Dropbox, link back',
-  create: 'create empty in Dropbox, link',
+  leave: 'symlink to somewhere else, left alone',
   link: 'link to the Dropbox copy',
-  relink: 're-point the existing symlink to Dropbox',
+  relink: 're-point the symlink to Dropbox',
   replace: 'back up, then link to the Dropbox copy',
-  upload: 'not in Dropbox yet, move this Mac’s copy in',
-  wait: 'not in Dropbox yet, sync it from the primary Mac first',
+  upload: 'move into Dropbox, link back',
 };
 
-// Actions that change something.
-export const CHANGES = new Set(['move', 'create', 'link', 'relink', 'replace', 'upload']);
+// Actions taken from Dropbox (step 1) and from this Mac (step 2).
+export const LINK_ACTIONS = new Set(['link', 'relink', 'replace']);
+export const UPLOAD_ACTIONS = new Set(['upload']);
+export const CHANGES = new Set([...LINK_ACTIONS, ...UPLOAD_ACTIONS]);
 
 export function timestamp(d = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
@@ -126,16 +119,10 @@ export function unlinkItem(item) {
 
 // Performs one planned action. Returns the backup path for 'replace'.
 export function applyItem(action, item, ts = timestamp()) {
-  const { local, shared, kind } = item;
+  const { local, shared } = item;
   switch (action) {
-    case 'move':
     case 'upload':
       move(local, shared);
-      link(local, shared);
-      return null;
-    case 'create':
-      fs.mkdirSync(kind === 'dir' ? shared : path.dirname(shared), { recursive: true });
-      if (kind === 'file') fs.writeFileSync(shared, '', { flag: 'a' });
       link(local, shared);
       return null;
     case 'link':

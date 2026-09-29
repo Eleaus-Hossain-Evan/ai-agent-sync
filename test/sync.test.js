@@ -22,12 +22,12 @@ const read = (p) => fs.readFileSync(p, 'utf8');
 const isLink = (p) => fs.lstatSync(p).isSymbolicLink();
 
 // Runs one Mac's sync for the given agent ids, answering yes to everything.
-function run(h, role, ids, agents = BUILTIN_AGENTS) {
+function run(h, ids, agents = BUILTIN_AGENTS) {
   const found = detectAgents(agents, root, h).filter((a) => ids.includes(a.id));
   const actions = [];
   for (const a of found) {
     for (const it of a.items) {
-      const action = planItem(role, it);
+      const action = planItem(it);
       actions.push(`${a.id}:${path.basename(it.local)}:${action}`);
       applyItem(action, it, 'TS');
     }
@@ -48,13 +48,13 @@ beforeEach(() => {
   root = sharedRoot(dropbox);
 });
 
-test('primary moves items into per-agent folders and links them back', () => {
+test('first Mac uploads its items into per-agent folders and links them back', () => {
   write(`${A}/.claude/CLAUDE.md`, 'rules A');
   write(`${A}/.claude/skills/s1/SKILL.md`, 'skill');
   write(`${A}/.gemini/GEMINI.md`, 'gem A');
 
-  const actions = run(A, 'primary', ['claude', 'gemini']);
-  assert.deepEqual(actions, ['claude:CLAUDE.md:move', 'claude:skills:move', 'gemini:GEMINI.md:move']);
+  const actions = run(A, ['claude', 'gemini']);
+  assert.deepEqual(actions, ['claude:CLAUDE.md:upload', 'claude:skills:upload', 'gemini:GEMINI.md:upload']);
   assert.equal(read(`${root}/claude/CLAUDE.md`), 'rules A');
   assert.ok(fs.existsSync(`${root}/claude/skills/s1/SKILL.md`));
   assert.equal(read(`${root}/gemini/GEMINI.md`), 'gem A');
@@ -62,39 +62,49 @@ test('primary moves items into per-agent folders and links them back', () => {
   assert.equal(read(`${A}/.gemini/GEMINI.md`), 'gem A');
 });
 
-test('primary creates missing items and never overwrites Dropbox', () => {
+test('items missing on both sides are skipped, never created', () => {
   fs.mkdirSync(`${A}/.codeium/windsurf`, { recursive: true });
-  assert.deepEqual(run(A, 'primary', ['windsurf']), ['windsurf:global_rules.md:create', 'windsurf:global_workflows:create']);
-  assert.equal(read(`${A}/.codeium/windsurf/memories/global_rules.md`), '');
-
-  write(`${B}/.gemini/GEMINI.md`, 'gem B');
-  write(`${root}/gemini/GEMINI.md`, 'already there');
-  assert.deepEqual(run(B, 'primary', ['gemini']), ['gemini:GEMINI.md:conflict']);
-  assert.equal(read(`${B}/.gemini/GEMINI.md`), 'gem B');
-  assert.equal(read(`${root}/gemini/GEMINI.md`), 'already there');
+  assert.deepEqual(run(A, ['windsurf']), ['windsurf:global_rules.md:skip', 'windsurf:global_workflows:skip']);
+  assert.ok(!fs.existsSync(`${root}/windsurf`));
+  assert.ok(!fs.existsSync(`${A}/.codeium/windsurf/memories/global_rules.md`));
 });
 
-test('secondary backs up real copies, links, and uploads local-only items', () => {
+test('second Mac: Dropbox wins with a backup, local-only items are uploaded', () => {
   write(`${A}/.claude/CLAUDE.md`, 'rules A');
-  run(A, 'primary', ['claude']);
+  write(`${A}/.claude/skills/s1/SKILL.md`, 'skill');
+  run(A, ['claude']);
 
   write(`${B}/.claude/CLAUDE.md`, 'rules B');
   write(`${B}/.codex/AGENTS.md`, 'codex B');
-  const actions = run(B, 'secondary', ['claude', 'codex']);
+  const actions = run(B, ['claude', 'codex']);
   assert.deepEqual(actions, ['claude:CLAUDE.md:replace', 'claude:skills:link', 'codex:AGENTS.md:upload']);
   assert.equal(read(`${B}/.claude/CLAUDE.md`), 'rules A');
   assert.equal(read(`${B}/.claude/CLAUDE.md.bak-TS`), 'rules B');
   assert.equal(read(`${root}/codex/AGENTS.md`), 'codex B');
   assert.ok(isLink(`${B}/.codex/AGENTS.md`));
+  // Mac A's copy in Dropbox is untouched by Mac B.
+  assert.equal(read(`${root}/claude/CLAUDE.md`), 'rules A');
+});
+
+test('an agent can be partly in Dropbox: linked items and local-only items', () => {
+  write(`${A}/.config/opencode/AGENTS.md`, 'oc A');
+  run(A, ['opencode']);
+  write(`${B}/.config/opencode/AGENTS.md`, 'oc B');
+  write(`${B}/.config/opencode/commands/c.md`, 'cmd');
+  const plan = detectAgents(BUILTIN_AGENTS, root, B)
+    .find((a) => a.id === 'opencode')
+    .items.map((it) => `${path.basename(it.local)}:${planItem(it)}`);
+  assert.deepEqual(plan, ['AGENTS.md:replace', 'skills:skip', 'agents:skip', 'commands:upload']);
 });
 
 test('re-running is idempotent and never nests skills/skills', () => {
+  write(`${A}/.claude/CLAUDE.md`, 'rules');
   write(`${A}/.claude/skills/s1/SKILL.md`, 'skill');
-  run(A, 'primary', ['claude']);
-  assert.deepEqual(run(A, 'primary', ['claude']), ['claude:CLAUDE.md:ok', 'claude:skills:ok']);
+  run(A, ['claude']);
+  assert.deepEqual(run(A, ['claude']), ['claude:CLAUDE.md:ok', 'claude:skills:ok']);
   fs.mkdirSync(`${B}/.claude`);
-  assert.deepEqual(run(B, 'secondary', ['claude']), ['claude:CLAUDE.md:link', 'claude:skills:link']);
-  assert.deepEqual(run(B, 'secondary', ['claude']), ['claude:CLAUDE.md:ok', 'claude:skills:ok']);
+  assert.deepEqual(run(B, ['claude']), ['claude:CLAUDE.md:link', 'claude:skills:link']);
+  assert.deepEqual(run(B, ['claude']), ['claude:CLAUDE.md:ok', 'claude:skills:ok']);
   assert.ok(!fs.existsSync(`${root}/claude/skills/skills`));
   assert.ok(detectAgents(BUILTIN_AGENTS, root, B).find((a) => a.id === 'claude').synced);
 });
@@ -130,13 +140,13 @@ test('tools.conf round-trip: discovered agent syncs on both Macs', () => {
   assert.equal(read(conf).split('\n').filter((l) => l.startsWith('newagent|')).length, 1);
 
   const agents = mergeAgents(BUILTIN_AGENTS, readToolsConf(conf));
-  run(A, 'primary', ['newagent'], agents);
+  run(A, ['newagent'], agents);
   assert.equal(read(`${root}/newagent/AGENTS.md`), 'new A');
 
   // Mac B has the agent folder but a different username/home: ~ paths expand there.
   write(`${B}/.newagent/AGENTS.md`, 'new B');
   assert.deepEqual(discoverAgents(agents, new Set(), B), []); // known via tools.conf
-  run(B, 'secondary', ['newagent'], agents);
+  run(B, ['newagent'], agents);
   assert.equal(read(`${B}/.newagent/AGENTS.md`), 'new A');
 });
 
@@ -185,7 +195,7 @@ function unlink(h, ids, agents = BUILTIN_AGENTS) {
 test('unlink restores real files and dirs and keeps the Dropbox copy', () => {
   write(`${A}/.claude/CLAUDE.md`, 'rules A');
   write(`${A}/.claude/skills/s1/SKILL.md`, 'skill');
-  run(A, 'primary', ['claude']);
+  run(A, ['claude']);
 
   assert.deepEqual(unlink(A, ['claude']), ['claude:CLAUDE.md:restore', 'claude:skills:restore']);
   assert.ok(!isLink(`${A}/.claude/CLAUDE.md`) && !isLink(`${A}/.claude/skills`));
@@ -201,7 +211,8 @@ test('unlink restores real files and dirs and keeps the Dropbox copy', () => {
 
 test('unlink leaves broken and non-linked items alone', () => {
   write(`${A}/.claude/CLAUDE.md`, 'rules A');
-  run(A, 'primary', ['claude']); // skills created empty in Dropbox + linked
+  fs.mkdirSync(`${A}/.claude/skills`);
+  run(A, ['claude']);
   fs.rmSync(`${root}/claude/skills`, { recursive: true }); // Dropbox copy gone -> broken link
   write(`${A}/.gemini/GEMINI.md`, 'real, never synced');
 
@@ -216,25 +227,26 @@ test('unlink leaves broken and non-linked items alone', () => {
 
 test('sync -> unlink -> sync round-trip on both Macs', () => {
   write(`${A}/.gemini/GEMINI.md`, 'gem');
-  run(A, 'primary', ['gemini']);
+  run(A, ['gemini']);
   fs.mkdirSync(`${B}/.gemini`);
-  run(B, 'secondary', ['gemini']);
+  run(B, ['gemini']);
   assert.deepEqual(unlink(B, ['gemini']), ['gemini:GEMINI.md:restore']);
   assert.equal(read(`${B}/.gemini/GEMINI.md`), 'gem');
   // Mac A is unaffected; re-syncing B backs up its real copy and links again.
   assert.ok(isLink(`${A}/.gemini/GEMINI.md`));
-  assert.deepEqual(run(B, 'secondary', ['gemini']), ['gemini:GEMINI.md:replace']);
+  assert.deepEqual(run(B, ['gemini']), ['gemini:GEMINI.md:replace']);
   assert.ok(isLink(`${B}/.gemini/GEMINI.md`));
 });
 
 test('status reports synced, partial, broken and unsynced agents', () => {
   write(`${A}/.claude/CLAUDE.md`, 'rules');
-  run(A, 'primary', ['claude', 'windsurf']); // windsurf not installed -> skipped
+  run(A, ['claude', 'windsurf']); // windsurf not installed -> skipped
   fs.mkdirSync(`${A}/.cursor/skills`, { recursive: true });
-  run(A, 'primary', ['cursor']);
+  fs.mkdirSync(`${A}/.cursor/agents`);
+  run(A, ['cursor']);
   fs.rmSync(`${A}/.cursor/agents`); // unlink one Cursor item -> partial
   write(`${A}/.gemini/GEMINI.md`, 'local');
-  run(A, 'primary', ['gemini']);
+  run(A, ['gemini']);
   fs.rmSync(`${root}/gemini/GEMINI.md`); // Dropbox copy gone -> broken
   write(`${A}/.codex/AGENTS.md`, 'never synced');
 
@@ -250,7 +262,7 @@ test('status reports synced, partial, broken and unsynced agents', () => {
 
 test('status lists Dropbox agents not linked here and conflicted copies', () => {
   write(`${A}/.codex/AGENTS.md`, 'codex');
-  run(A, 'primary', ['codex']);
+  run(A, ['codex']);
   write(`${root}/codex/AGENTS (Evan's conflicted copy 2026-09-29).md`, 'x');
 
   const st = computeStatus(BUILTIN_AGENTS, root, B); // Mac B: codex not installed/linked

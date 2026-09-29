@@ -13,7 +13,7 @@ Needs macOS (it uses the Menlo and SF system fonts), Python 3 and Node. The vide
 | File | What it does |
 |---|---|
 | `setup_home.sh` | Creates the fake home: Claude Code, Cursor, Gemini CLI, Antigravity, Codex, and `~/.crush` as an agent that isn't in the registry. |
-| `record.py` | Runs `bin/cli.js` in a pseudo-terminal, types the command, picks Primary, ticks the agents in `--select`, applies, and saves timestamped output as JSON. The row positions come from the CLI's own scan code, so apps installed on your Mac don't break the key presses. |
+| `record.py` | Runs `bin/cli.js` in a pseudo-terminal, types the command, ticks the agents in `--select`, applies, and saves timestamped output as JSON. The row positions come from the CLI's own scan code, so apps installed on your Mac don't break the key presses. |
 | `term.py` | Shared helpers: replays the recording into a virtual terminal (pyte) and draws it with the terminal colours. |
 | `render_gif.py` | Terminal window only, 2× for Retina, 15 fps, one shared palette. Output: `docs/demo.gif`. |
 | `render_video.py` | 1080×1350 MP4 (4:5, LinkedIn): title card, the run at `--speed` (default 1.5×), end card. |

@@ -1,6 +1,6 @@
 """Records a real `ai-agent-sync` run in a pseudo-terminal.
 
-Types the command, picks Primary, ticks the agents named in --select, applies
+Types the command, ticks the agents named in --select, applies
 the plan, and saves the timestamped terminal output as JSON for the renderers.
 
 usage: record.py HOME OUT.json [--cols 88] [--rows 36] [--pace 1.0]
@@ -20,14 +20,16 @@ ap.add_argument('--select', default='Claude Code,Cursor,Gemini CLI,crush')
 a = ap.parse_args()
 targets = [t.strip() for t in a.select.split(',')]
 
-# Checklist order exactly as the CLI builds it: detected (not yet synced) agents, then discovered ones.
+# Order of the "…sync from this Mac?" list, exactly as the CLI builds it:
+# agents with items to upload, then discovered ones. (The demo Dropbox starts empty.)
 order_js = f"""
 import {{ BUILTIN_AGENTS }} from '{REPO}/src/agents.js';
 import {{ detectAgents, discoverAgents }} from '{REPO}/src/scan.js';
+import {{ planItem }} from '{REPO}/src/sync.js';
 const root = '/nonexistent';
-const detected = detectAgents(BUILTIN_AGENTS, root).filter((x) => !x.synced).map((x) => x.name);
+const upload = detectAgents(BUILTIN_AGENTS, root).filter((x) => x.items.some((it) => planItem(it) === 'upload')).map((x) => x.name);
 const found = discoverAgents(BUILTIN_AGENTS, new Set()).map((x) => x.name);
-console.log(JSON.stringify([...detected, ...found]));
+console.log(JSON.stringify([...upload, ...found]));
 """
 order = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', order_js], env={**os.environ, 'HOME': a.home}))
 missing = [t for t in targets if t not in order]
@@ -67,9 +69,7 @@ def wait_for(text, timeout=15):
 def key(k, pause): os.write(fd, k); pump(pause * a.pace)
 DOWN, SPACE, ENTER = b'\x1b[B', b' ', b'\r'
 
-wait_for('What is this Mac'); pump(1.4 * a.pace)
-key(ENTER, 0.8)                                   # Primary
-wait_for('Which agents'); pump(1.6 * a.pace)
+wait_for('from this Mac?'); pump(1.8 * a.pace)
 pos = 0
 for row in rows_to_tick:
     for _ in range(row - pos): key(DOWN, 0.35)

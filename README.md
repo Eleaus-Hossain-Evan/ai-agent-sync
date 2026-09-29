@@ -35,14 +35,11 @@ So when you open **the same project on a different device**, the agent works fro
 ## Quick start
 
 1. Install [Dropbox](https://www.dropbox.com/install) on both Macs, sign in, and set the default sync state to **Available offline** (see [How it works](#how-it-works)).
-2. On the Mac with the files you want to keep:
+2. On the Mac with the files you want to keep, run it and tick the agents to sync:
    ```sh
-   npx ai-agent-sync      # choose "Primary"
+   npx ai-agent-sync
    ```
-3. Wait until Dropbox shows **Up to date**, then on the other Mac:
-   ```sh
-   npx ai-agent-sync      # choose "Secondary"
-   ```
+3. Wait until Dropbox shows **Up to date**, then run the same command on the other Mac. Everything already in Dropbox is pre-selected for linking (local copies are backed up first). Agents that exist only on that Mac are offered separately, unticked.
 
 Try `npx ai-agent-sync --dry-run` first: it scans and shows the plan without changing anything.
 
@@ -73,9 +70,12 @@ Dropbox/AIAgentsShared/
 └── tools.ignore   folders you chose to hide
 ```
 
-- **Primary** moves each selected file or folder into `AIAgentsShared/<agent>/` and links it back.
-- **Secondary** shows a diff against the Dropbox copy, asks, keeps a `.bak-<timestamp>` backup, then links.
-- Nothing is overwritten in Dropbox. Re-running is safe; synced agents are listed as *Already synced*.
+Every run works the same way, on every Mac, in two steps:
+
+1. **Link from Dropbox.** Anything already in Dropbox wins. This Mac's copy is kept as `<name>.bak-<timestamp>`, and the plan says whether it differed. These agents start ticked.
+2. **Also sync these from this Mac?** Files that aren't in Dropbox yet are moved in and linked back. These start unticked, and nothing is uploaded unless you tick it.
+
+Nothing in Dropbox is ever overwritten by a local copy. Items that exist on neither side are ignored. Re-running is safe: synced agents are listed as *Already synced*.
 
 ## New agents, automatically
 

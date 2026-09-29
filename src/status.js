@@ -9,11 +9,13 @@ import { detectAgents } from './scan.js';
 //   broken    linked, but the Dropbox copy is missing
 //   elsewhere symlink pointing somewhere else
 //   local     real file/folder, not synced
-//   missing   nothing there
+//   missing   not here, but Dropbox has it (sync would link it)
+//   absent    on neither side; ignored, like sync does
 function itemHealth(item) {
   if (item.state === 'linked') return exists(item.shared) ? 'ok' : 'broken';
   if (item.state === 'link') return 'elsewhere';
-  return item.state === 'real' ? 'local' : 'missing';
+  if (item.state === 'real') return 'local';
+  return exists(item.shared) ? 'missing' : 'absent';
 }
 
 // Agent summary from its items.
@@ -22,9 +24,10 @@ function itemHealth(item) {
 //   broken   any item broken
 //   off      nothing linked
 function agentHealth(items) {
-  if (items.some((i) => i.health === 'broken')) return 'broken';
-  const ok = items.filter((i) => i.health === 'ok').length;
-  if (ok === items.length) return 'synced';
+  const relevant = items.filter((i) => i.health !== 'absent');
+  if (relevant.some((i) => i.health === 'broken')) return 'broken';
+  const ok = relevant.filter((i) => i.health === 'ok').length;
+  if (ok && ok === relevant.length) return 'synced';
   return ok ? 'partial' : 'off';
 }
 
