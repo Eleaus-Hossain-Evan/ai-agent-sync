@@ -162,7 +162,7 @@ Missing one? Discovery usually finds it. To add it for everyone, open a PR again
 
 ## Requirements
 
-macOS, Node.js 18+, Dropbox desktop app.
+macOS, Node.js 20.12+, Dropbox desktop app.
 
 ## Development
 

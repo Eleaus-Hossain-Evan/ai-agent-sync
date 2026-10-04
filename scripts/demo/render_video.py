@@ -68,7 +68,7 @@ def end_card():
     pill(d, 690, '$ npx ai-agent-sync', mono(44), CYAN, (10, 11, 20))
     centered(d, 850, 'github.com/Eleaus-Hossain-Evan/ai-agent-sync', sf(32, 'Medium'), (200, 206, 225))
     centered(d, 905, 'npmjs.com/package/ai-agent-sync', sf(32, 'Medium'), (200, 206, 225))
-    centered(d, 1010, 'macOS · Node 18+ · Dropbox', sf(28), MUTED)
+    centered(d, 1010, 'macOS · Node 20+ · Dropbox', sf(28), MUTED)
     return im
 
 
