@@ -124,6 +124,20 @@ npx ai-agent-sync status
 
 The command exits with code `1` when something is broken or conflicted, so you can use it in scripts.
 
+## Resolve conflicts
+
+If both Macs change the same file before Dropbox catches up, Dropbox keeps both and renames one, e.g. `CLAUDE (Evan's conflicted copy 2026-10-04).md`. `status` lists these; `resolve` fixes them:
+
+```sh
+npx ai-agent-sync resolve
+```
+
+- For each conflicted copy you see a diff against the current version, then choose **Keep current**, **Use the conflicted copy** or **Keep both**.
+- If the original is gone, you can restore the conflicted copy under the original name, move it to Trash, or keep it.
+- The version you don't keep goes to the **macOS Trash**, so you can still get it back from Finder.
+- Because the fix happens inside Dropbox, your other Mac gets it automatically.
+- `--dry-run` shows the conflicts and diffs without changing anything.
+
 ## Supported agents
 
 | Agent | Synced |

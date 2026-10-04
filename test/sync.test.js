@@ -9,7 +9,8 @@ import { detectAgents, discoverAgents } from '../src/scan.js';
 import { planItem, applyItem, planUnlink, unlinkItem } from '../src/sync.js';
 import { readToolsConf, mergeAgents, addToToolsConf, readIgnore, addToIgnore } from '../src/store.js';
 import { findDropbox, sharedRoot } from '../src/dropbox.js';
-import { computeStatus } from '../src/status.js';
+import { computeStatus, findConflicts } from '../src/status.js';
+import { originalOf, resolveConflict } from '../src/conflicts.js';
 import { expand, tilde } from '../src/paths.js';
 
 let base, A, B, root;
@@ -273,4 +274,45 @@ test('status lists Dropbox agents not linked here and conflicted copies', () => 
   const none = computeStatus(BUILTIN_AGENTS, path.join(base, 'no-such-root'), A);
   assert.equal(none.rootExists, false);
   assert.deepEqual(none.notLinkedHere, []);
+});
+
+test('originalOf strips the Dropbox conflict marker from files and folders', () => {
+  assert.equal(originalOf("/d/claude/CLAUDE (Evan's conflicted copy 2026-10-04).md"), '/d/claude/CLAUDE.md');
+  assert.equal(originalOf('/d/gemini/GEMINI (conflicted copy 2026-10-04).md'), '/d/gemini/GEMINI.md');
+  assert.equal(originalOf("/d/claude/skills (Mac mini's conflicted copy 2026-10-04)"), '/d/claude/skills');
+});
+
+test('resolveConflict: every choice, losers go to the Trash', () => {
+  const trash = `${A}/.Trash`;
+  const conflict = (dir, name) => `${root}/${dir}/${name}`;
+
+  // keep-current
+  write(`${root}/claude/CLAUDE.md`, 'current');
+  write(conflict('claude', "CLAUDE (Evan's conflicted copy 2026-10-04).md"), 'other');
+  resolveConflict(conflict('claude', "CLAUDE (Evan's conflicted copy 2026-10-04).md"), 'keep-current', A);
+  assert.equal(read(`${root}/claude/CLAUDE.md`), 'current');
+  assert.equal(read(`${trash}/CLAUDE (Evan's conflicted copy 2026-10-04).md`), 'other');
+
+  // use-conflicted: the previous version goes to Trash
+  write(conflict('claude', 'CLAUDE (conflicted copy 2026-10-05).md'), 'newer');
+  resolveConflict(conflict('claude', 'CLAUDE (conflicted copy 2026-10-05).md'), 'use-conflicted', A);
+  assert.equal(read(`${root}/claude/CLAUDE.md`), 'newer');
+  assert.equal(read(`${trash}/CLAUDE.md`), 'current');
+
+  // a second CLAUDE.md in the Trash gets a timestamped name instead of overwriting
+  write(conflict('claude', 'CLAUDE (conflicted copy 2026-10-06).md'), 'newest');
+  resolveConflict(conflict('claude', 'CLAUDE (conflicted copy 2026-10-06).md'), 'use-conflicted', A);
+  assert.equal(read(`${trash}/CLAUDE.md`), 'current');
+  assert.equal(fs.readdirSync(trash).filter((n) => n.startsWith('CLAUDE ') && !n.includes('conflicted')).length, 1);
+
+  // restore an orphan, trash another, keep a third
+  write(conflict('gemini', 'GEMINI (conflicted copy 2026-10-04).md'), 'gem');
+  resolveConflict(conflict('gemini', 'GEMINI (conflicted copy 2026-10-04).md'), 'restore', A);
+  assert.equal(read(`${root}/gemini/GEMINI.md`), 'gem');
+  write(conflict('codex', 'AGENTS (conflicted copy 2026-10-04).md'), 'x');
+  resolveConflict(conflict('codex', 'AGENTS (conflicted copy 2026-10-04).md'), 'trash', A);
+  write(conflict('qwen', 'QWEN (conflicted copy 2026-10-04).md'), 'y');
+  resolveConflict(conflict('qwen', 'QWEN (conflicted copy 2026-10-04).md'), 'keep-both', A);
+
+  assert.deepEqual(findConflicts(root).map((p) => path.basename(p)), ['QWEN (conflicted copy 2026-10-04).md']);
 });

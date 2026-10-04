@@ -10,7 +10,8 @@ import { readToolsConf, mergeAgents, readIgnore, addToToolsConf, addToIgnore } f
 import { detectAgents, discoverAgents, itemState } from '../src/scan.js';
 import { planItem, applyItem, diffItem, timestamp, ACTION_TEXT, CHANGES, LINK_ACTIONS, UPLOAD_ACTIONS, planUnlink, unlinkItem, UNLINK_TEXT } from '../src/sync.js';
 import { installChecker, hookInstalled, checkerPath, HOOK_SNIPPET } from '../src/checker.js';
-import { computeStatus } from '../src/status.js';
+import { computeStatus, findConflicts } from '../src/status.js';
+import { originalOf, conflictDiff, resolveConflict } from '../src/conflicts.js';
 import { tilde, exists } from '../src/paths.js';
 import { banner, guard, actionColor, compactPaths } from '../src/ui.js';
 
@@ -32,6 +33,7 @@ Usage:
   npx ai-agent-sync [--dry-run]          Sync agents through Dropbox
   npx ai-agent-sync unlink [--dry-run]   Restore real files on this Mac
   npx ai-agent-sync status               Show what is synced, broken or conflicted
+  npx ai-agent-sync resolve [--dry-run]  Fix Dropbox conflicted copies
 
 Options:
   --dry-run   Scan and show the plan without changing anything
@@ -42,7 +44,7 @@ Options:
 const dryRun = args.includes('--dry-run');
 
 const command = args[0] && !args[0].startsWith('-') ? args[0] : 'sync';
-if (!['sync', 'unlink', 'status'].includes(command)) {
+if (!['sync', 'unlink', 'status', 'resolve'].includes(command)) {
   console.error(`Unknown command "${command}". Run ai-agent-sync --help.`);
   process.exit(1);
 }
@@ -397,7 +399,9 @@ async function statusMain() {
   }
 
   if (st.conflicts.length) {
-    p.log.error(`Dropbox conflicted copies:\n${st.conflicts.map((c) => tilde(c)).join('\n')}`);
+    p.log.error(
+      `Dropbox conflicted copies:\n${st.conflicts.map((c) => tilde(c)).join('\n')}\n${pc.dim(`Run ${pc.cyan('npx ai-agent-sync resolve')} to fix them.`)}`,
+    );
   } else if (st.rootExists) {
     p.log.success('No Dropbox conflicts');
   }
@@ -425,7 +429,75 @@ async function statusMain() {
   }
 }
 
-({ sync: main, unlink: unlinkMain, status: statusMain })[command]().catch((err) => {
+// `resolve`: walk through Dropbox conflicted copies one by one.
+async function resolveMain() {
+  const { root } = setup(p.spinner());
+  const conflicts = exists(root) ? findConflicts(root).sort() : [];
+  if (!conflicts.length) {
+    p.outro('No Dropbox conflicts.');
+    return;
+  }
+  p.log.info(`Found ${pc.bold(conflicts.length)} conflicted cop${conflicts.length === 1 ? 'y' : 'ies'}`);
+
+  const MAX_LINES = 30;
+  const clip = (text) => {
+    const lines = text.split('\n');
+    return lines.length <= MAX_LINES ? text : [...lines.slice(0, MAX_LINES), pc.dim(`… ${lines.length - MAX_LINES} more lines`)].join('\n');
+  };
+  let resolved = 0;
+  let kept = 0;
+  for (const c of conflicts) {
+    if (!exists(c)) continue; // was inside a conflicted folder that is already resolved
+    const original = originalOf(c);
+    const name = tilde(original);
+    let choice;
+    if (exists(original)) {
+      const diff = conflictDiff(c, original);
+      p.note(diff ? clip(diff) : pc.dim('Same content as the current version.'), `${name}: current vs conflicted copy`);
+      if (dryRun) continue;
+      choice = guard(
+        await p.select({
+          message: `Which version of ${path.basename(original)} do you want to keep?`,
+          options: [
+            { value: 'keep-current', label: 'Keep current', hint: 'conflicted copy goes to Trash' },
+            { value: 'use-conflicted', label: 'Use the conflicted copy', hint: 'current version goes to Trash' },
+            { value: 'keep-both', label: 'Keep both', hint: 'change nothing' },
+          ],
+        }),
+      );
+    } else {
+      p.note(`${tilde(c)}\n${pc.dim(`There is no ${path.basename(original)} next to it.`)}`, `${name}: original is missing`);
+      if (dryRun) continue;
+      choice = guard(
+        await p.select({
+          message: `What should happen to this conflicted copy?`,
+          options: [
+            { value: 'restore', label: `Restore it as ${path.basename(original)}` },
+            { value: 'trash', label: 'Move to Trash' },
+            { value: 'keep-both', label: 'Keep as is' },
+          ],
+        }),
+      );
+    }
+    try {
+      const msg = resolveConflict(c, choice);
+      if (choice === 'keep-both') {
+        kept++;
+        p.log.info(msg);
+      } else {
+        resolved++;
+        p.log.success(msg);
+      }
+    } catch (err) {
+      p.log.error(`${tilde(c)}: ${err.message}`);
+    }
+  }
+
+  if (dryRun) p.outro('Dry run: nothing changed.');
+  else p.outro(`${resolved} resolved, ${kept} kept as is.${resolved ? ' Anything replaced is in the Trash.' : ''}`);
+}
+
+({ sync: main, unlink: unlinkMain, status: statusMain, resolve: resolveMain })[command]().catch((err) => {
   p.log.error(err.stack || String(err));
   process.exit(1);
 });
