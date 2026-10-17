@@ -1,0 +1,28 @@
+𝗦𝗮𝗺𝗲 𝗽𝗿𝗼𝗷𝗲𝗰𝘁. 𝗦𝗮𝗺𝗲 𝗔𝗜 𝗮𝗴𝗲𝗻𝘁. 𝗗𝗶𝗳𝗳𝗲𝗿𝗲𝗻𝘁 𝗼𝘂𝘁𝗽𝘂𝘁 𝗮𝘁 𝗵𝗼𝗺𝗲 𝗮𝗻𝗱 𝗮𝘁 𝘁𝗵𝗲 𝗼𝗳𝗳𝗶𝗰𝗲.
+
+It took me a while to see why.
+
+Project-level files like 𝙲𝙻𝙰𝚄𝙳𝙴.𝚖𝚍 and 𝙰𝙶𝙴𝙽𝚃𝚂.𝚖𝚍 live in Git, so they match everywhere.
+
+But every agent also reads 𝘶𝘴𝘦𝘳-𝘭𝘦𝘷𝘦𝘭 files: ~/.𝚌𝚕𝚊𝚞𝚍𝚎/𝙲𝙻𝙰𝚄𝙳𝙴.𝚖𝚍, global skills, Cursor rules, Codex's 𝙰𝙶𝙴𝙽𝚃𝚂.𝚖𝚍… 𝘛𝘩𝘰𝘴𝘦 𝘯𝘦𝘷𝘦𝘳 𝘭𝘦𝘢𝘷𝘦 𝘵𝘩𝘦 𝘮𝘢𝘤𝘩𝘪𝘯𝘦 𝘵𝘩𝘦𝘺 𝘸𝘦𝘳𝘦 𝘸𝘳𝘪𝘵𝘵𝘦𝘯 𝘰𝘯.
+
+𝗪𝗵𝘆 𝗻𝗼𝘁 𝗚𝗶𝘁?
+Each agent keeps its config in its own folder, right next to MCP settings and JSON files with API keys. And committing and pulling after every small edit got old fast.
+
+So I built 𝗮𝗶-𝗮𝗴𝗲𝗻𝘁-𝘀𝘆𝗻𝗰, a small open-source CLI:
+
+▶  npx ai-agent-sync
+
+𝗪𝗵𝗮𝘁 𝗶𝘁 𝗱𝗼𝗲𝘀
+▸ Finds the agents on your machine (Claude Code, Cursor, Codex, Gemini CLI, Antigravity, OpenCode, Windsurf, Copilot and more), even ones it doesn't know yet
+▸ Moves only the rules and skills into Dropbox and leaves links behind, so every agent keeps reading its usual path
+▸ On your other computer, links to the Dropbox copies and backs up the local ones first
+▸ Works on 𝗺𝗮𝗰𝗢𝗦 𝗮𝗻𝗱 𝗪𝗶𝗻𝗱𝗼𝘄𝘀, even a Mac and a Windows PC sharing one Dropbox
+▸ 𝘕𝘦𝘷𝘦𝘳 syncs settings or API keys
+▸ 𝚜𝚝𝚊𝚝𝚞𝚜, 𝚞𝚗𝚕𝚒𝚗𝚔 and 𝚛𝚎𝚜𝚘𝚕𝚟𝚎 (for Dropbox conflicts) when you need them
+
+𝗢𝗻𝗲 𝗖𝗟𝗔𝗨𝗗𝗘.𝗺𝗱. 𝗘𝘃𝗲𝗿𝘆 𝗱𝗲𝘃𝗶𝗰𝗲.
+
+Link in the first comment. Feedback and PRs welcome!
+
+#AI #ClaudeCode #DeveloperTools #OpenSource #Productivity
