@@ -20,7 +20,7 @@ ap.add_argument('--select', default='Claude Code,Cursor,Gemini CLI,crush')
 a = ap.parse_args()
 targets = [t.strip() for t in a.select.split(',')]
 
-# Order of the "…sync from this Mac?" list, exactly as the CLI builds it:
+# Order of the "…sync from this computer?" list, exactly as the CLI builds it:
 # agents with items to upload, then discovered ones. (The demo Dropbox starts empty.)
 order_js = f"""
 import {{ BUILTIN_AGENTS }} from '{REPO}/src/agents.js';
@@ -69,7 +69,7 @@ def wait_for(text, timeout=15):
 def key(k, pause): os.write(fd, k); pump(pause * a.pace)
 DOWN, SPACE, ENTER = b'\x1b[B', b' ', b'\r'
 
-wait_for('from this Mac?'); pump(1.8 * a.pace)
+wait_for('from this computer?'); pump(1.8 * a.pace)
 pos = 0
 for row in rows_to_tick:
     for _ in range(row - pos): key(DOWN, 0.35)
