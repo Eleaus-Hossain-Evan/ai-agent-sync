@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/ai-agent-sync)](https://www.npmjs.com/package/ai-agent-sync)
 [![test](https://github.com/Eleaus-Hossain-Evan/ai-agent-sync/actions/workflows/test.yml/badge.svg)](https://github.com/Eleaus-Hossain-Evan/ai-agent-sync/actions/workflows/test.yml)
 
-Keep the global rules and skills of **every AI coding agent** in sync between your devices, through Dropbox.
+Keep the global rules and skills of **every AI coding agent** in sync between your computers, through Dropbox. Works on **macOS and Windows**, including a Mac and a Windows PC sharing the same Dropbox.
 
 ```sh
 npx ai-agent-sync
@@ -35,12 +35,12 @@ So when you open **the same project on a different device**, the agent works fro
 
 ## Quick start
 
-1. Install [Dropbox](https://www.dropbox.com/install) on both Macs, sign in, and set the default sync state to **Available offline** (see [How it works](#how-it-works)).
-2. On the Mac with the files you want to keep, run it and tick the agents to sync:
+1. Install [Dropbox](https://www.dropbox.com/install) on both computers, sign in, and set the default sync state to **Available offline** (see [How it works](#how-it-works)). On Windows, also see [Windows](#windows).
+2. On the computer with the files you want to keep, run it and tick the agents to sync:
    ```sh
    npx ai-agent-sync
    ```
-3. Wait until Dropbox shows **Up to date**, then run the same command on the other Mac. Everything already in Dropbox is pre-selected for linking (local copies are backed up first). Agents that exist only on that Mac are offered separately, unticked.
+3. Wait until Dropbox shows **Up to date**, then run the same command on the other computer. Everything already in Dropbox is pre-selected for linking (local copies are backed up first). Agents that exist only on that computer are offered separately, unticked.
 
 Try `npx ai-agent-sync --dry-run` first: it scans and shows the plan without changing anything.
 
@@ -52,12 +52,12 @@ Try `npx ai-agent-sync --dry-run` first: it scans and shows the plan without cha
 ~/.claude/CLAUDE.md  ──symlink──▶  Dropbox/AIAgentsShared/claude/CLAUDE.md  ◀──sync──▶  other devices
 ```
 
-1. **The agent reads and writes its usual path.** macOS resolves the symlink, so every read and edit actually happens in the Dropbox copy. The agent doesn't notice any difference.
+1. **The agent reads and writes its usual path.** The operating system resolves the link, so every read and edit actually happens in the Dropbox copy. The agent doesn't notice any difference.
 2. **Dropbox uploads the change** to the cloud as soon as the file is saved.
 3. **Your other device downloads it** as soon as Dropbox runs there, and its agents pick up the updated config.
 
 > [!IMPORTANT]
-> Make the files **available offline**, so they are always on disk and never online-only placeholders. In the Dropbox app, open **Settings › Account › Sync & storage** and set the default sync state to **Available offline**, or right-click `Dropbox/AIAgentsShared` in Finder and choose **Make available offline**.
+> Make the files **available offline**, so they are always on disk and never online-only placeholders. In the Dropbox app, open **Settings › Account › Sync & storage** and set the default sync state to **Available offline**, or right-click `Dropbox/AIAgentsShared` in Finder (macOS) or File Explorer (Windows) and choose **Make available offline**.
 
 The shared folder is organized by agent:
 
@@ -71,21 +71,21 @@ Dropbox/AIAgentsShared/
 └── tools.ignore   folders you chose to hide
 ```
 
-Every run works the same way, on every Mac, in two steps:
+Every run works the same way, on every computer, in two steps:
 
-1. **Link from Dropbox.** Anything already in Dropbox wins. This Mac's copy is kept as `<name>.bak-<timestamp>`, and the plan says whether it differed. These agents start ticked.
-2. **Also sync these from this Mac?** Files that aren't in Dropbox yet are moved in and linked back. These start unticked, and nothing is uploaded unless you tick it.
+1. **Link from Dropbox.** Anything already in Dropbox wins. This computer's copy is kept as `<name>.bak-<timestamp>`, and the plan says whether it differed. These agents start ticked.
+2. **Also sync these from this computer?** Files that aren't in Dropbox yet are moved in and linked back. These start unticked, and nothing is uploaded unless you tick it.
 
 Nothing in Dropbox is ever overwritten by a local copy. Items that exist on neither side are ignored. Re-running is safe: synced agents are listed as *Already synced*.
 
 ## New agents, automatically
 
-Besides the built-in registry, every run scans the hidden folders in `~`, `~/.config` and `~/Library/Application Support` for anything that looks like an agent (`AGENTS.md`, `QWEN.md`-style files, `skills/`, `rules/`, `prompts/`, `steering/`, `workflows/`). They appear under **Possible agents**:
+Besides the built-in registry, every run scans the hidden folders in `~`, `~/.config` and the app data folder (`~/Library/Application Support` on macOS, `%APPDATA%` on Windows) for anything that looks like an agent (`AGENTS.md`, `QWEN.md`-style files, `skills/`, `rules/`, `prompts/`, `steering/`, `workflows/`). They appear under **Possible agents**:
 
-- **Select** one and it is recorded in `AIAgentsShared/tools.conf` and synced. The other Mac reads the same file, so it knows the agent too.
+- **Select** one and it is recorded in `AIAgentsShared/tools.conf` and synced. The other computer reads the same file, so it knows the agent too.
 - **Hide** false matches once; they go to `tools.ignore` and never show again.
 
-The scan takes well under a second, never walks your Documents or projects, and skips folders protected by macOS privacy settings.
+The scan takes well under a second, never walks your Documents or projects, and skips system folders (and, on macOS, folders protected by privacy settings).
 
 ## What is never synced
 
@@ -105,7 +105,7 @@ npx ai-agent-sync unlink
 
 - Pick the agents to unlink from a checklist (all unchecked by default) and review the plan first.
 - Each symlink is replaced by a **real copy** of the Dropbox file or folder, so the agent keeps working with the same content, now local-only.
-- Afterwards you're asked whether to also delete those agents' folders from Dropbox. The default is **No**, because your other Mac may still use them. If you say yes, the other Mac's links for those agents break until you unlink them there too. Dropbox keeps deleted files recoverable for a while.
+- Afterwards you're asked whether to also delete those agents' folders from Dropbox. The default is **No**, because your other computer may still use them. If you say yes, the other computer's links for those agents break until you unlink them there too. Dropbox keeps deleted files recoverable for a while.
 - `--dry-run` shows the plan without changing anything.
 
 To sync again later, just run `npx ai-agent-sync`.
@@ -119,7 +119,7 @@ npx ai-agent-sync status
 ```
 
 - Every detected agent is shown as **synced**, **partly synced**, **broken** (linked, but the Dropbox copy is gone) or **not synced**, with details for anything that's wrong.
-- **In Dropbox, not linked on this Mac** lists agents synced from your other Mac that this one doesn't use yet.
+- **In Dropbox, not linked on this computer** lists agents synced from your other computer that this one doesn't use yet.
 - Any Dropbox *conflicted copy* files are listed.
 - If Claude is synced, it checks that the conflict hook is set up.
 
@@ -127,16 +127,16 @@ The command exits with code `1` when something is broken or conflicted, so you c
 
 ## Resolve conflicts
 
-If both Macs change the same file before Dropbox catches up, Dropbox keeps both and renames one, e.g. `CLAUDE (Evan's conflicted copy 2026-10-04).md`. `status` lists these; `resolve` fixes them:
+If both computers change the same file before Dropbox catches up, Dropbox keeps both and renames one, e.g. `CLAUDE (Evan's conflicted copy 2026-10-04).md`. `status` lists these; `resolve` fixes them:
 
 ```sh
 npx ai-agent-sync resolve
 ```
 
 - For each conflicted copy you see a diff against the current version, then choose **Keep current**, **Use the conflicted copy** or **Keep both**.
-- If the original is gone, you can restore the conflicted copy under the original name, move it to Trash, or keep it.
-- The version you don't keep goes to the **macOS Trash**, so you can still get it back from Finder.
-- Because the fix happens inside Dropbox, your other Mac gets it automatically.
+- If the original is gone, you can restore the conflicted copy under the original name, move it to the Trash / Recycle Bin, or keep it.
+- The version you don't keep goes to the **Trash** (macOS) or **Recycle Bin** (Windows), so you can still get it back.
+- Because the fix happens inside Dropbox, your other computer gets it automatically.
 - `--dry-run` shows the conflicts and diffs without changing anything.
 
 ## Supported agents
@@ -150,19 +150,28 @@ npx ai-agent-sync resolve
 | Gemini CLI | `~/.gemini/GEMINI.md` |
 | Antigravity | `~/.gemini/antigravity/{skills, global_workflows}` |
 | Windsurf | `~/.codeium/windsurf/memories/global_rules.md`, `global_workflows` |
-| VS Code (Copilot) | `~/Library/Application Support/Code/User/prompts` |
+| VS Code (Copilot) | `~/Library/Application Support/Code/User/prompts` (macOS), `%APPDATA%\Code\User\prompts` (Windows) |
 | GitHub Copilot CLI | `~/.copilot/skills` |
 | Codex | `~/.codex/AGENTS.md` |
 | Kiro | `~/.kiro/steering` |
 | Amp | `~/.config/amp/AGENTS.md` |
 | Qwen Code | `~/.qwen/QWEN.md` |
-| Zed | `~/.config/zed/prompts` |
+| Zed | `~/.config/zed/prompts` (macOS), `%LOCALAPPDATA%\Zed\prompts` (Windows) |
 
 Missing one? Discovery usually finds it. To add it for everyone, open a PR against [`src/agents.js`](src/agents.js): one entry per agent.
 
+All other paths are the same on Windows, under your user folder (`~` = `C:\Users\<you>`).
+
+## Windows
+
+- **Turn on Developer Mode** (Settings › System › For developers › Developer Mode). Windows only lets programs link *files* (like `CLAUDE.md` or `AGENTS.md`) with it on. Without it, folders still sync (they use junctions, which need no special rights), and `ai-agent-sync` tells you which files it skipped.
+- **Use Windows Terminal or PowerShell.** Git Bash's default terminal (mintty) doesn't support the interactive prompts.
+- **Close your agents before syncing.** Windows doesn't let a program move a file another app has open. If that happens, `ai-agent-sync` says so; close the app and run it again.
+- A Mac and a Windows PC can share one `AIAgentsShared` folder: files are stored per agent, not per computer.
+
 ## Requirements
 
-macOS, Node.js 20.12+, Dropbox desktop app.
+macOS or Windows 10/11, Node.js 20.12+, Dropbox desktop app.
 
 ## Development
 

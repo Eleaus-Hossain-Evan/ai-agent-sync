@@ -4,7 +4,7 @@ import path from 'node:path';
 import { home, exists } from './paths.js';
 import { detectAgents } from './scan.js';
 
-// Per-item health on this Mac.
+// Per-item health on this computer.
 //   ok        linked to its Dropbox copy
 //   broken    linked, but the Dropbox copy is missing
 //   elsewhere symlink pointing somewhere else
@@ -57,7 +57,7 @@ export function computeStatus(agents, root, h = home()) {
     return { ...a, items, health: agentHealth(items) };
   });
 
-  // Agent folders in Dropbox that this Mac doesn't link to (e.g. synced from the other Mac).
+  // Agent folders in Dropbox that this computer doesn't link to (e.g. synced from the other one).
   const used = new Set(detected.filter((a) => a.health !== 'off').map((a) => a.id));
   let inDropbox = [];
   try {

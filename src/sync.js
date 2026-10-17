@@ -1,4 +1,4 @@
-// Per-item sync. The Dropbox copy always wins; this Mac's copy is backed up
+// Per-item sync. The Dropbox copy always wins; this computer's copy is backed up
 // before it's replaced. Items Dropbox doesn't have can be uploaded.
 //
 //   local \ Dropbox      has a copy                 no copy
@@ -8,8 +8,9 @@
 //   symlink elsewhere    relink                     leave
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { exists } from './paths.js';
+import { compare } from './diff.js';
+import { isWindows, linkType, removeLink, canLinkFiles, DEVELOPER_MODE_HELP } from './platform.js';
 
 export function planItem(item) {
   const inDropbox = exists(item.shared);
@@ -34,7 +35,7 @@ export const ACTION_TEXT = {
   upload: 'move into Dropbox, link back',
 };
 
-// Actions taken from Dropbox (step 1) and from this Mac (step 2).
+// Actions taken from Dropbox (step 1) and from this computer (step 2).
 export const LINK_ACTIONS = new Set(['link', 'relink', 'replace']);
 export const UPLOAD_ACTIONS = new Set(['upload']);
 export const CHANGES = new Set([...LINK_ACTIONS, ...UPLOAD_ACTIONS]);
@@ -44,28 +45,28 @@ export function timestamp(d = new Date()) {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-// Differences between the local copy ("this Mac") and the Dropbox copy
-// ('' when equal). Paths are shortened so the output fits the terminal.
-export function diffItem(item) {
-  const args =
-    item.kind === 'dir'
-      ? ['-rq', item.local, item.shared]
-      : ['-u', '-L', 'this Mac', '-L', 'Dropbox', item.local, item.shared];
-  return spawnSync('diff', args, { encoding: 'utf8' })
-    .stdout.trim()
-    .split(item.shared)
-    .join('Dropbox')
-    .split(item.local)
-    .join('this Mac');
-}
+// Differences between the local copy and the Dropbox copy ('' when equal).
+export const diffItem = (item) => compare(item.local, item.shared, 'this computer', 'Dropbox');
 
-// Symlink local -> shared, replacing any existing symlink atomically.
-function link(local, shared) {
+// Symlink local -> shared, replacing any existing link.
+function link(local, shared, kind) {
   fs.mkdirSync(path.dirname(local), { recursive: true });
+  if (isWindows) {
+    // Windows can't rename onto an existing folder link: remove it, then link.
+    removeLink(local);
+    fs.symlinkSync(shared, local, linkType(kind));
+    return;
+  }
+  // macOS: create next to it and rename over it, so the swap is atomic.
   const tmp = `${local}.ai-agent-sync-tmp`;
   fs.rmSync(tmp, { force: true });
-  fs.symlinkSync(shared, tmp);
+  fs.symlinkSync(shared, tmp, linkType(kind));
   fs.renameSync(tmp, local);
+}
+
+// Stops before touching anything when this item can't be linked here.
+function assertLinkable(item) {
+  if (item.kind === 'file' && !canLinkFiles()) throw new Error(DEVELOPER_MODE_HELP);
 }
 
 // rename, falling back to copy + delete across volumes.
@@ -105,7 +106,7 @@ export function unlinkItem(item) {
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.cpSync(shared, tmp, { recursive: true, preserveTimestamps: true });
   // A directory can't be renamed over a symlink, so move the link aside first.
-  fs.rmSync(oldLink, { force: true });
+  removeLink(oldLink);
   fs.renameSync(local, oldLink);
   try {
     fs.renameSync(tmp, local);
@@ -114,25 +115,37 @@ export function unlinkItem(item) {
     fs.rmSync(tmp, { recursive: true, force: true });
     throw err;
   }
-  fs.rmSync(oldLink, { force: true });
+  // Only the link itself is removed, never the Dropbox copy behind it.
+  removeLink(oldLink);
 }
 
 // Performs one planned action. Returns the backup path for 'replace'.
 export function applyItem(action, item, ts = timestamp()) {
-  const { local, shared } = item;
+  const { local, shared, kind } = item;
+  if (CHANGES.has(action)) assertLinkable(item);
   switch (action) {
     case 'upload':
       move(local, shared);
-      link(local, shared);
+      try {
+        link(local, shared, kind);
+      } catch (err) {
+        move(shared, local); // put this computer's copy back
+        throw err;
+      }
       return null;
     case 'link':
     case 'relink':
-      link(local, shared);
+      link(local, shared, kind);
       return null;
     case 'replace': {
       const backup = `${local}.bak-${ts}`;
       fs.renameSync(local, backup);
-      link(local, shared);
+      try {
+        link(local, shared, kind);
+      } catch (err) {
+        fs.renameSync(backup, local); // undo the backup move
+        throw err;
+      }
       return backup;
     }
     default:

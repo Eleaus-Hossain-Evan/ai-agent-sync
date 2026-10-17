@@ -11,7 +11,9 @@ import { readToolsConf, mergeAgents, addToToolsConf, readIgnore, addToIgnore } f
 import { findDropbox, sharedRoot } from '../src/dropbox.js';
 import { computeStatus, findConflicts } from '../src/status.js';
 import { originalOf, resolveConflict } from '../src/conflicts.js';
-import { expand, tilde } from '../src/paths.js';
+import { expand, tilde, portable } from '../src/paths.js';
+import { isWindows, appDataDir, removeLink, linkType } from '../src/platform.js';
+import { compare } from '../src/diff.js';
 
 let base, A, B, root;
 
@@ -22,7 +24,7 @@ const write = (p, text = '') => {
 const read = (p) => fs.readFileSync(p, 'utf8');
 const isLink = (p) => fs.lstatSync(p).isSymbolicLink();
 
-// Runs one Mac's sync for the given agent ids, answering yes to everything.
+// Runs one computer's sync for the given agent ids, answering yes to everything.
 function run(h, ids, agents = BUILTIN_AGENTS) {
   const found = detectAgents(agents, root, h).filter((a) => ids.includes(a.id));
   const actions = [];
@@ -44,9 +46,12 @@ beforeEach(() => {
   fs.mkdirSync(dropbox);
   for (const h of [A, B]) {
     fs.mkdirSync(h);
-    fs.symlinkSync(dropbox, path.join(h, 'Dropbox'));
+    fs.symlinkSync(dropbox, path.join(h, 'Dropbox'), linkType('dir'));
   }
   root = sharedRoot(dropbox);
+  // Losing versions go to a known folder, never the real Trash / Recycle Bin.
+  process.env.AI_AGENT_SYNC_TRASH_DIR = path.join(A, '.Trash');
+  delete process.env.AI_AGENT_SYNC_NO_FILE_LINKS;
 });
 
 test('first Mac uploads its items into per-agent folders and links them back', () => {
@@ -118,16 +123,14 @@ test('discovery finds unlisted agents and skips known, ignored and noise folders
   write(`${A}/.claude/CLAUDE.md`, 'x'); // registry
   write(`${A}/.npm/AGENTS.md`, 'x'); // noise
   write(`${A}/.plain/README.md`, 'x'); // not instructions
-  write(`${A}/Library/Application Support/SomeAgent/prompts/p.md`, 'x');
-  write(`${A}/Library/Application Support/com.apple.Thing/rules/r.md`, 'x'); // protected
+  write(path.join(appDataDir(A), 'SomeAgent', 'prompts', 'p.md'), 'x');
+  const protectedName = isWindows ? 'Microsoft' : 'com.apple.Thing';
+  write(path.join(appDataDir(A), protectedName, 'rules', 'r.md'), 'x'); // protected
 
   const ignored = new Set(['~/.shorebird']);
   const found = discoverAgents(BUILTIN_AGENTS, ignored, A);
-  assert.deepEqual(found.map((a) => a.detect[0]).sort(), [
-    '~/.config/otheragent',
-    '~/.newagent',
-    '~/Library/Application Support/SomeAgent',
-  ]);
+  // App data folders are stored as @appdata so the line works on macOS and Windows.
+  assert.deepEqual(found.map((a) => a.detect[0]).sort(), ['@appdata/SomeAgent', '~/.config/otheragent', '~/.newagent']);
   const na = found.find((a) => a.id === 'newagent');
   assert.deepEqual(na.items, [{ path: '~/.newagent/AGENTS.md', kind: 'file' }]);
 });
@@ -144,7 +147,7 @@ test('tools.conf round-trip: discovered agent syncs on both Macs', () => {
   run(A, ['newagent'], agents);
   assert.equal(read(`${root}/newagent/AGENTS.md`), 'new A');
 
-  // Mac B has the agent folder but a different username/home: ~ paths expand there.
+  // Computer B has the agent folder but a different username/home: ~ paths expand there.
   write(`${B}/.newagent/AGENTS.md`, 'new B');
   assert.deepEqual(discoverAgents(agents, new Set(), B), []); // known via tools.conf
   run(B, ['newagent'], agents);
@@ -166,21 +169,27 @@ test('tools.ignore and path helpers', () => {
   addToIgnore(`${root}/tools.ignore`, ['~/.shorebird']);
   addToIgnore(`${root}/tools.ignore`, ['~/.shorebird']);
   assert.deepEqual([...readIgnore(`${root}/tools.ignore`)], ['~/.shorebird']);
-  assert.equal(expand('~/.x', A), `${A}/.x`);
-  assert.equal(tilde(`${A}/.x`, A), '~/.x');
+  assert.equal(expand('~/.x', A), path.join(A, '.x'));
+  assert.equal(tilde(path.join(A, '.x', 'y'), A), '~/.x/y'); // always forward slashes
+  assert.equal(expand('@appdata/Code/User', A), path.join(appDataDir(A), 'Code', 'User'));
+  assert.equal(portable(path.join(appDataDir(A), 'Code', 'User'), A), '@appdata/Code/User');
+  assert.equal(portable(path.join(A, '.codex'), A), '~/.codex');
 });
 
-test('findDropbox prefers info.json, then CloudStorage, then ~/Dropbox', () => {
+test('findDropbox prefers info.json, then the default folders', () => {
   assert.equal(findDropbox(A), path.join(A, 'Dropbox'));
-  fs.mkdirSync(`${A}/Library/CloudStorage/Dropbox`, { recursive: true });
-  assert.equal(findDropbox(A), `${A}/Library/CloudStorage/Dropbox`);
+  if (!isWindows) {
+    fs.mkdirSync(path.join(A, 'Library', 'CloudStorage', 'Dropbox'), { recursive: true });
+    assert.equal(findDropbox(A), path.join(A, 'Library', 'CloudStorage', 'Dropbox'));
+  }
   const custom = path.join(base, 'Custom Dropbox');
   fs.mkdirSync(custom);
-  write(`${A}/.dropbox/info.json`, JSON.stringify({ personal: { path: custom } }));
+  const info = isWindows ? path.join(appDataDir(A), 'Dropbox', 'info.json') : path.join(A, '.dropbox', 'info.json');
+  write(info, JSON.stringify({ personal: { path: custom } }));
   assert.equal(findDropbox(A), custom);
 });
 
-// Unlinks the given agents on one Mac; returns "id:basename:action" lines.
+// Unlinks the given agents on one computer; returns "id:basename:action" lines.
 function unlink(h, ids, agents = BUILTIN_AGENTS) {
   const out = [];
   for (const a of detectAgents(agents, root, h).filter((x) => ids.includes(x.id))) {
@@ -226,14 +235,14 @@ test('unlink leaves broken and non-linked items alone', () => {
   assert.equal(read(`${A}/.gemini/GEMINI.md`), 'real, never synced');
 });
 
-test('sync -> unlink -> sync round-trip on both Macs', () => {
+test('sync -> unlink -> sync round-trip on both computers', () => {
   write(`${A}/.gemini/GEMINI.md`, 'gem');
   run(A, ['gemini']);
   fs.mkdirSync(`${B}/.gemini`);
   run(B, ['gemini']);
   assert.deepEqual(unlink(B, ['gemini']), ['gemini:GEMINI.md:restore']);
   assert.equal(read(`${B}/.gemini/GEMINI.md`), 'gem');
-  // Mac A is unaffected; re-syncing B backs up its real copy and links again.
+  // Computer A is unaffected; re-syncing B backs up its real copy and links again.
   assert.ok(isLink(`${A}/.gemini/GEMINI.md`));
   assert.deepEqual(run(B, ['gemini']), ['gemini:GEMINI.md:replace']);
   assert.ok(isLink(`${B}/.gemini/GEMINI.md`));
@@ -245,7 +254,7 @@ test('status reports synced, partial, broken and unsynced agents', () => {
   fs.mkdirSync(`${A}/.cursor/skills`, { recursive: true });
   fs.mkdirSync(`${A}/.cursor/agents`);
   run(A, ['cursor']);
-  fs.rmSync(`${A}/.cursor/agents`); // unlink one Cursor item -> partial
+  removeLink(path.join(A, '.cursor', 'agents')); // unlink one Cursor item -> partial
   write(`${A}/.gemini/GEMINI.md`, 'local');
   run(A, ['gemini']);
   fs.rmSync(`${root}/gemini/GEMINI.md`); // Dropbox copy gone -> broken
@@ -266,7 +275,7 @@ test('status lists Dropbox agents not linked here and conflicted copies', () => 
   run(A, ['codex']);
   write(`${root}/codex/AGENTS (Evan's conflicted copy 2026-09-29).md`, 'x');
 
-  const st = computeStatus(BUILTIN_AGENTS, root, B); // Mac B: codex not installed/linked
+  const st = computeStatus(BUILTIN_AGENTS, root, B); // computer B: codex not installed/linked
   assert.deepEqual(st.notLinkedHere, ['codex']);
   assert.equal(st.conflicts.length, 1);
   assert.match(st.conflicts[0], /conflicted copy/);
@@ -277,13 +286,14 @@ test('status lists Dropbox agents not linked here and conflicted copies', () => 
 });
 
 test('originalOf strips the Dropbox conflict marker from files and folders', () => {
-  assert.equal(originalOf("/d/claude/CLAUDE (Evan's conflicted copy 2026-10-04).md"), '/d/claude/CLAUDE.md');
-  assert.equal(originalOf('/d/gemini/GEMINI (conflicted copy 2026-10-04).md'), '/d/gemini/GEMINI.md');
-  assert.equal(originalOf("/d/claude/skills (Mac mini's conflicted copy 2026-10-04)"), '/d/claude/skills');
+  const d = (...parts) => path.join(base, ...parts);
+  assert.equal(originalOf(d('claude', "CLAUDE (Evan's conflicted copy 2026-10-04).md")), d('claude', 'CLAUDE.md'));
+  assert.equal(originalOf(d('gemini', 'GEMINI (conflicted copy 2026-10-04).md')), d('gemini', 'GEMINI.md'));
+  assert.equal(originalOf(d('claude', "skills (Mac mini's conflicted copy 2026-10-04)")), d('claude', 'skills'));
 });
 
 test('resolveConflict: every choice, losers go to the Trash', () => {
-  const trash = `${A}/.Trash`;
+  const trash = process.env.AI_AGENT_SYNC_TRASH_DIR;
   const conflict = (dir, name) => `${root}/${dir}/${name}`;
 
   // keep-current
@@ -315,4 +325,44 @@ test('resolveConflict: every choice, losers go to the Trash', () => {
   resolveConflict(conflict('qwen', 'QWEN (conflicted copy 2026-10-04).md'), 'keep-both', A);
 
   assert.deepEqual(findConflicts(root).map((p) => path.basename(p)), ['QWEN (conflicted copy 2026-10-04).md']);
+});
+
+test('removing a link never deletes the files behind it', () => {
+  const target = path.join(base, 'target');
+  write(path.join(target, 'keep.md'), 'keep');
+  const link = path.join(A, 'link');
+  fs.symlinkSync(target, link, linkType('dir'));
+  removeLink(link);
+  assert.ok(!fs.existsSync(link));
+  assert.equal(read(path.join(target, 'keep.md')), 'keep');
+  assert.throws(() => removeLink(target)); // refuses real folders
+});
+
+test('without file links (Windows, no Developer Mode) nothing is moved', () => {
+  process.env.AI_AGENT_SYNC_NO_FILE_LINKS = '1';
+  write(`${A}/.claude/CLAUDE.md`, 'rules A');
+  write(`${A}/.claude/skills/s1/SKILL.md`, 'skill');
+  const [claude] = detectAgents(BUILTIN_AGENTS, root, A);
+  const [md, skills] = claude.items;
+  assert.throws(() => applyItem(planItem(md), md, 'TS'), /Developer Mode/);
+  assert.equal(read(`${A}/.claude/CLAUDE.md`), 'rules A'); // untouched
+  assert.ok(!fs.existsSync(`${root}/claude/CLAUDE.md`));
+  applyItem(planItem(skills), skills, 'TS'); // folders still sync
+  assert.ok(isLink(`${A}/.claude/skills`));
+});
+
+test('compare: unified diff for files, one line per difference for folders', () => {
+  write(`${A}/a.md`, 'one\ntwo\n');
+  write(`${A}/b.md`, 'one\nthree\n');
+  write(`${A}/same.md`, 'one\ntwo\n');
+  assert.equal(compare(`${A}/a.md`, `${A}/same.md`, 'x', 'y'), '');
+  assert.equal(compare(`${A}/a.md`, `${A}/b.md`, 'this computer', 'Dropbox'), '--- this computer\n+++ Dropbox\n@@ -1,2 +1,2 @@\n one\n-two\n+three');
+  write(`${A}/d1/x.md`, '1');
+  write(`${A}/d1/only1.md`, '1');
+  write(`${A}/d2/x.md`, '2');
+  write(`${A}/d2/sub/only2.md`, '2');
+  assert.equal(
+    compare(`${A}/d1`, `${A}/d2`, 'this computer', 'Dropbox'),
+    'Only in this computer: only1.md\nOnly in Dropbox: sub/\nOnly in Dropbox: sub/only2.md\nFiles differ: x.md',
+  );
 });

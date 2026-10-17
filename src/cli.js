@@ -8,11 +8,12 @@ import { findDropbox, sharedRoot, SHARED_DIR_NAME, DROPBOX_INSTALL_URL } from '.
 import { readToolsConf, mergeAgents, readIgnore, addToToolsConf, addToIgnore } from './store.js';
 import { detectAgents, discoverAgents, itemState } from './scan.js';
 import { planItem, applyItem, diffItem, timestamp, ACTION_TEXT, CHANGES, LINK_ACTIONS, UPLOAD_ACTIONS, planUnlink, unlinkItem, UNLINK_TEXT } from './sync.js';
-import { installChecker, hookInstalled, checkerPath, HOOK_SNIPPET } from './checker.js';
+import { installChecker, hookInstalled, checkerPath, hookSnippet } from './checker.js';
 import { computeStatus, findConflicts } from './status.js';
 import { originalOf, conflictDiff, resolveConflict } from './conflicts.js';
-import { tilde, exists } from './paths.js';
+import { tilde, expand, exists } from './paths.js';
 import { banner, guard, actionColor, compactPaths } from './ui.js';
+import { SUPPORTED, WORDS, canLinkFiles, explain, DEVELOPER_MODE_HELP } from './platform.js';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const args = process.argv.slice(2);
@@ -24,13 +25,14 @@ if (args.includes('--version') || args.includes('-v')) {
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`ai-agent-sync ${pkg.version}
 
-Sync the global rules and skills of your AI coding agents between Macs
-through Dropbox. Run it on each Mac: whatever is already in Dropbox is
-linked (local copies backed up first); anything else can be uploaded.
+Sync the global rules and skills of your AI coding agents between your
+computers (macOS and Windows) through Dropbox. Run it on each computer:
+whatever is already in Dropbox is linked (local copies backed up first);
+anything else can be uploaded.
 
 Usage:
   npx ai-agent-sync [--dry-run]          Sync agents through Dropbox
-  npx ai-agent-sync unlink [--dry-run]   Restore real files on this Mac
+  npx ai-agent-sync unlink [--dry-run]   Restore real files on this computer
   npx ai-agent-sync status               Show what is synced, broken or conflicted
   npx ai-agent-sync resolve [--dry-run]  Fix Dropbox conflicted copies
 
@@ -52,13 +54,13 @@ if (command !== 'status' && (!process.stdin.isTTY || !process.stdout.isTTY)) {
   console.error('ai-agent-sync is interactive. Run it in a terminal.');
   process.exit(1);
 }
-if (process.platform !== 'darwin') {
-  console.error('ai-agent-sync currently supports macOS only.');
+if (!SUPPORTED) {
+  console.error('ai-agent-sync supports macOS and Windows.');
   process.exit(1);
 }
 
 // "(~/.claude/{CLAUDE.md, skills})" label suffix.
-const paths = (items) => pc.dim(`(${compactPaths(items.map((i) => tilde(i.local ?? i.path)))})`);
+const paths = (items) => pc.dim(`(${compactPaths(items.map((i) => tilde(i.local ?? expand(i.path))))})`);
 
 // Shared start of every command: banner, Dropbox, registry + tools.conf.
 // Without a spinner (status), progress lines are simply not shown.
@@ -77,6 +79,22 @@ function setup(s = { start() {}, stop() {}, error() {} }) {
   return { root, confFile, ignoreFile: path.join(root, 'tools.ignore'), agents: mergeAgents(BUILTIN_AGENTS, readToolsConf(confFile)) };
 }
 
+// Windows without Developer Mode can't link files: mark those items so they
+// are left out of the plan, and return them for a notice. Folders still sync.
+function blockFileLinks(agents) {
+  if (canLinkFiles()) return [];
+  const out = [];
+  for (const a of agents) {
+    for (const it of a.items) {
+      if (it.kind === 'file' && CHANGES.has(it.action)) {
+        it.action = 'devmode';
+        out.push({ ...it, agentName: a.name });
+      }
+    }
+  }
+  return out;
+}
+
 async function main() {
   const s = p.spinner();
   const { root, confFile, ignoreFile, agents } = setup(s);
@@ -85,9 +103,12 @@ async function main() {
   s.start('Scanning ~ for AI agents');
   const detected = detectAgents(agents, root);
   for (const a of detected) for (const it of a.items) it.action = planItem(it);
+  const blocked = blockFileLinks(detected);
   const discovered = discoverAgents(agents, readIgnore(ignoreFile));
   const has = (a, set) => a.items.some((it) => set.has(it.action));
-  const synced = detected.filter((a) => !has(a, CHANGES) && a.items.some((it) => it.action === 'ok'));
+  const synced = detected.filter(
+    (a) => !has(a, CHANGES) && !a.items.some((it) => it.action === 'devmode') && a.items.some((it) => it.action === 'ok'),
+  );
   const toLink = detected.filter((a) => has(a, LINK_ACTIONS));
   const toUpload = detected.filter((a) => has(a, UPLOAD_ACTIONS));
   s.stop(
@@ -96,10 +117,16 @@ async function main() {
   );
 
   if (synced.length) p.note(synced.map((a) => `${pc.green('✔')} ${a.name}`).join('\n'), 'Already synced');
+  if (blocked.length) {
+    p.note(
+      `${blocked.map((it) => `${it.agentName}: ${tilde(it.local)}`).join('\n')}\n\n${pc.dim(DEVELOPER_MODE_HELP)}`,
+      pc.yellow('These files need Windows Developer Mode'),
+    );
+  }
   // Keep the Claude conflict checker in place whenever Claude is synced.
   if (!dryRun && detected.some((a) => a.id === 'claude' && a.items.some((it) => it.action === 'ok'))) installChecker(root);
   if (!toLink.length && !toUpload.length && !discovered.length) {
-    p.outro('Everything on this Mac is already synced.');
+    p.outro(blocked.length ? 'Nothing else to sync on this computer.' : 'Everything on this computer is already synced.');
     return;
   }
 
@@ -120,11 +147,11 @@ async function main() {
     );
   }
 
-  // Step 2: only on this Mac (all unchecked).
+  // Step 2: only on this computer (all unchecked).
   let uploadPicked = new Set();
   const groups = {};
   if (toUpload.length) {
-    groups['On this Mac, not in Dropbox'] = toUpload.map((a) => ({
+    groups['On this computer, not in Dropbox'] = toUpload.map((a) => ({
       value: a.id,
       label: `${a.name} ${paths(itemsFor(a, UPLOAD_ACTIONS))}`,
     }));
@@ -139,7 +166,7 @@ async function main() {
     uploadPicked = new Set(
       guard(
         await p.groupMultiselect({
-          message: `${toLink.length ? 'Also sync these from this Mac?' : 'Which agents do you want to sync from this Mac?'} ${pc.dim('(check that Dropbox is "Up to date" first)')}`,
+          message: `${toLink.length ? 'Also sync these from this computer?' : 'Which agents do you want to sync from this computer?'} ${pc.dim('(check that Dropbox is "Up to date" first)')}`,
           options: groups,
           initialValues: [],
           required: false,
@@ -167,6 +194,7 @@ async function main() {
   // What will happen, per step.
   const newDetected = detectAgents(newAgents, root);
   for (const a of newDetected) for (const it of a.items) it.action = planItem(it);
+  const newBlocked = blockFileLinks(newDetected);
   const linkWork = toLink
     .filter((a) => linkPicked.has(a.id))
     .map((a) => ({ agent: a, items: itemsFor(a, LINK_ACTIONS) }));
@@ -196,7 +224,8 @@ async function main() {
       .join('\n\n');
   const sections = [];
   if (linkWork.length) sections.push(section('Link from Dropbox', linkWork));
-  if (uploadWork.length) sections.push(section('Upload from this Mac', uploadWork));
+  if (uploadWork.length) sections.push(section('Upload from this computer', uploadWork));
+  if (newBlocked.length) sections.push(pc.yellow(`Skipped (need Developer Mode): ${newBlocked.map((it) => tilde(it.local)).join(', ')}`));
   if (newAgents.length) sections.push(pc.dim(`Records ${newAgents.map((a) => a.name).join(', ')} in ${SHARED_DIR_NAME}/tools.conf`));
   if (hide.length) sections.push(pc.dim(`Hides ${hide.join(', ')} from future scans`));
   p.note(sections.join('\n\n'), dryRun ? 'Plan (dry run)' : 'Plan');
@@ -224,7 +253,7 @@ async function main() {
         p.log.success(`${agent.name}: ${tilde(it.local)} ${pc.dim('→')} ${pc.dim(tilde(it.shared))}`);
       } catch (err) {
         failed++;
-        p.log.error(`${agent.name}: ${tilde(it.local)}: ${err.message}`);
+        p.log.error(`${agent.name}: ${tilde(it.local)}: ${explain(err)}`);
       }
     }
   }
@@ -241,18 +270,18 @@ async function main() {
   const linked = touched.filter((it) => itemState(it.local, it.shared) === 'linked' && exists(it.local)).length;
   p.log.step(`${linked}/${touched.length} items linked to Dropbox${failed ? pc.red(`, ${failed} failed`) : ''}`);
   if (backups.length) p.note(backups.map((b) => tilde(b)).join('\n'), 'Backups (delete once you have checked them)');
-  if (hookMissing) p.note(`Add this to ~/.claude/settings.json so Claude warns about Dropbox conflicts:\n\n${HOOK_SNIPPET}`, 'Claude hook');
+  if (hookMissing) p.note(`Add this to ~/.claude/settings.json so Claude warns about Dropbox conflicts:\n\n${hookSnippet()}`, 'Claude hook');
 
   p.outro(
     [
       'Done.',
-      `${pc.dim('•')} In Finder, right-click Dropbox › ${SHARED_DIR_NAME} › Make available offline`,
-      `${pc.dim('•')} Run ${pc.cyan('npx ai-agent-sync')} on your other Mac too`,
+      `${pc.dim('•')} In ${WORDS.fileManager}, right-click Dropbox › ${SHARED_DIR_NAME} › Make available offline`,
+      `${pc.dim('•')} Run ${pc.cyan('npx ai-agent-sync')} on your other computer too`,
     ].join('\n   '),
   );
 }
 
-// `unlink`: replace this Mac's links with real copies of the Dropbox files.
+// `unlink`: replace this computer's links with real copies of the Dropbox files.
 async function unlinkMain() {
   const s = p.spinner();
   const { root, agents } = setup(s);
@@ -261,7 +290,7 @@ async function unlinkMain() {
   const linked = detectAgents(agents, root).filter((a) => a.items.some((i) => i.state === 'linked'));
   s.stop(`Found ${pc.bold(linked.length)} linked agent${linked.length === 1 ? '' : 's'}`);
   if (!linked.length) {
-    p.outro('Nothing on this Mac is linked to Dropbox.');
+    p.outro('Nothing on this computer is linked to Dropbox.');
     return;
   }
 
@@ -320,7 +349,7 @@ async function unlinkMain() {
       } catch (err) {
         ok = false;
         failed++;
-        p.log.error(`${a.name}: ${tilde(it.local)}: ${err.message}`);
+        p.log.error(`${a.name}: ${tilde(it.local)}: ${explain(err)}`);
       }
     }
     if (ok) fullyRestored.push(a);
@@ -332,7 +361,7 @@ async function unlinkMain() {
     const names = folders.map((f) => `${SHARED_DIR_NAME}/${path.basename(f)}`).join(', ');
     const remove = guard(
       await p.confirm({
-        message: `Also delete ${names} from Dropbox? Your other Mac's links for ${folders.length === 1 ? 'it' : 'them'} will break. Dropbox keeps deleted files recoverable for a while.`,
+        message: `Also delete ${names} from Dropbox? Your other computer's links for ${folders.length === 1 ? 'it' : 'them'} will break. Dropbox keeps deleted files recoverable for a while.`,
         initialValue: false,
       }),
     );
@@ -385,15 +414,15 @@ async function statusMain() {
       }
       return line;
     });
-    p.note(lines.join('\n'), 'Agents on this Mac');
+    p.note(lines.join('\n'), 'Agents on this computer');
   } else {
-    p.log.info('No known AI agents found on this Mac.');
+    p.log.info('No known AI agents found on this computer.');
   }
 
   if (st.notLinkedHere.length) {
     p.note(
       `${st.notLinkedHere.map((id) => `${SHARED_DIR_NAME}/${id}`).join('\n')}\n\n${pc.dim(`Run ${pc.cyan('npx ai-agent-sync')} to link them here.`)}`,
-      'In Dropbox, not linked on this Mac',
+      'In Dropbox, not linked on this computer',
     );
   }
 
@@ -410,7 +439,7 @@ async function statusMain() {
     const script = fs.existsSync(checkerPath());
     if (script && hookInstalled()) p.log.success('Claude conflict hook is set up');
     else if (!script) p.log.warn(`Claude conflict checker ${tilde(checkerPath())} is missing. Run ${pc.cyan('npx ai-agent-sync')} to reinstall it.`);
-    else p.note(`Add this to ~/.claude/settings.json so Claude warns about Dropbox conflicts:\n\n${HOOK_SNIPPET}`, 'Claude conflict hook is not set up');
+    else p.note(`Add this to ~/.claude/settings.json so Claude warns about Dropbox conflicts:\n\n${hookSnippet()}`, 'Claude conflict hook is not set up');
   }
 
   const broken = st.agents.filter((a) => a.health === 'broken').length;
@@ -458,8 +487,8 @@ async function resolveMain() {
         await p.select({
           message: `Which version of ${path.basename(original)} do you want to keep?`,
           options: [
-            { value: 'keep-current', label: 'Keep current', hint: 'conflicted copy goes to Trash' },
-            { value: 'use-conflicted', label: 'Use the conflicted copy', hint: 'current version goes to Trash' },
+            { value: 'keep-current', label: 'Keep current', hint: `conflicted copy goes to the ${WORDS.trash}` },
+            { value: 'use-conflicted', label: 'Use the conflicted copy', hint: `current version goes to the ${WORDS.trash}` },
             { value: 'keep-both', label: 'Keep both', hint: 'change nothing' },
           ],
         }),
@@ -472,7 +501,7 @@ async function resolveMain() {
           message: `What should happen to this conflicted copy?`,
           options: [
             { value: 'restore', label: `Restore it as ${path.basename(original)}` },
-            { value: 'trash', label: 'Move to Trash' },
+            { value: 'trash', label: `Move to the ${WORDS.trash}` },
             { value: 'keep-both', label: 'Keep as is' },
           ],
         }),
@@ -488,12 +517,12 @@ async function resolveMain() {
         p.log.success(msg);
       }
     } catch (err) {
-      p.log.error(`${tilde(c)}: ${err.message}`);
+      p.log.error(`${tilde(c)}: ${explain(err)}`);
     }
   }
 
   if (dryRun) p.outro('Dry run: nothing changed.');
-  else p.outro(`${resolved} resolved, ${kept} kept as is.${resolved ? ' Anything replaced is in the Trash.' : ''}`);
+  else p.outro(`${resolved} resolved, ${kept} kept as is.${resolved ? ` Anything replaced is in the ${WORDS.trash}.` : ''}`);
 }
 
 ({ sync: main, unlink: unlinkMain, status: statusMain, resolve: resolveMain })[command]().catch((err) => {

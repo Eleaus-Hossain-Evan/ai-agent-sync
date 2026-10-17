@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { home, expand, tilde, lstat, readlink } from './paths.js';
+import { home, expand, tilde, portable, lstat, readlink } from './paths.js';
+import { isWindows, appDataDir, samePath, normalize } from './platform.js';
 
 // Folders discovery never looks inside: caches, toolchains, credentials.
 const SKIP = new Set([
@@ -17,7 +18,7 @@ const NOT_INSTRUCTIONS = new Set([
 // Where one agent item lives in Dropbox.
 export const sharedPath = (root, agentId, localPath) => path.join(root, agentId, path.basename(localPath));
 
-// State of one item on this Mac:
+// State of one item on this computer:
 //   linked  symlink to its Dropbox copy
 //   link    symlink somewhere else
 //   real    real file or folder
@@ -25,11 +26,11 @@ export const sharedPath = (root, agentId, localPath) => path.join(root, agentId,
 export function itemState(localPath, shared) {
   const st = lstat(localPath);
   if (!st) return 'missing';
-  if (st.isSymbolicLink()) return readlink(localPath) === shared ? 'linked' : 'link';
+  if (st.isSymbolicLink()) return samePath(readlink(localPath), shared) ? 'linked' : 'link';
   return 'real';
 }
 
-// Registry agents found on this Mac, with every item's paths and state.
+// Registry agents found on this computer, with every item's paths and state.
 export function detectAgents(agents, root, h = home()) {
   return agents
     .filter((a) => a.detect.some((d) => fs.existsSync(expand(d, h))))
@@ -64,10 +65,12 @@ function agentItems(folder) {
   return out;
 }
 
-// Application Support folders that macOS privacy protection guards (Contacts,
-// call history, iCloud, Apple system data). Reading them can pop a permission
-// prompt, and no AI agent lives there.
-const PROTECTED = /^(com\.apple\.|AddressBook|CallHistory|MobileSync|Knowledge|FileProvider|CloudDocs|iCloud|Apple|Safari)/;
+// App data folders discovery skips. On macOS: folders guarded by privacy
+// protection (reading them can pop a permission prompt). On Windows: big
+// system and browser folders. No AI agent lives in either.
+const PROTECTED = isWindows
+  ? /^(Microsoft|Packages|Temp|Mozilla|Google|Adobe|Apple|Dropbox|npm|npm-cache|NVIDIA|Intel|Zoom)/i
+  : /^(com\.apple\.|AddressBook|CallHistory|MobileSync|Knowledge|FileProvider|CloudDocs|iCloud|Apple|Safari)/;
 
 function childDirs(dir, skip = () => false) {
   try {
@@ -81,9 +84,10 @@ function childDirs(dir, skip = () => false) {
 }
 
 // Folders that could hold an agent: hidden folders in ~, everything in
-// ~/.config, and everything (plus one level down) in Application Support.
+// ~/.config, and everything (plus one level down) in the app data folder
+// (Application Support on macOS, AppData\Roaming on Windows).
 function candidateFolders(h) {
-  const appSupport = path.join(h, 'Library', 'Application Support');
+  const appSupport = appDataDir(h);
   return [
     ...childDirs(h).filter((p) => path.basename(p).startsWith('.')),
     ...childDirs(path.join(h, '.config')),
@@ -113,8 +117,12 @@ export function discoverAgents(agents, ignored, h = home()) {
     for (const d of a.detect) known.push(expand(d, h));
     for (const it of a.items) known.push(expand(it.path, h));
   }
-  const isKnown = (f) =>
-    ignored.has(tilde(f, h)) || known.some((k) => k === f || k.startsWith(f + path.sep) || f.startsWith(k + path.sep));
+  const keys = known.map(normalize);
+  const isKnown = (f) => {
+    if (ignored.has(tilde(f, h)) || ignored.has(portable(f, h))) return true;
+    const n = normalize(f);
+    return keys.some((k) => k === n || k.startsWith(n + path.sep) || n.startsWith(k + path.sep));
+  };
 
   const taken = new Set(agents.map((a) => a.id));
   const found = [];
@@ -127,8 +135,8 @@ export function discoverAgents(agents, ignored, h = home()) {
       id,
       name: id,
       folder,
-      detect: [tilde(folder, h)],
-      items: items.map((it) => ({ path: tilde(it.path, h), kind: it.kind })),
+      detect: [portable(folder, h)],
+      items: items.map((it) => ({ path: portable(it.path, h), kind: it.kind })),
     });
   }
   return found;

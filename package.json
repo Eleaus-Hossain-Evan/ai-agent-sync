@@ -1,7 +1,7 @@
 {
   "name": "ai-agent-sync",
-  "version": "0.5.1",
-  "description": "Sync the global rules and skills of every AI coding agent (Claude Code, Cursor, Codex, Gemini, OpenCode, Windsurf, Copilot…) between Macs through Dropbox.",
+  "version": "0.6.0",
+  "description": "Sync the global rules and skills of every AI coding agent (Claude Code, Cursor, Codex, Gemini, OpenCode, Windsurf, Copilot…) between your computers through Dropbox. macOS and Windows.",
   "author": "Eleaus Hossain Evan",
   "license": "MIT",
   "repository": {
@@ -27,7 +27,8 @@
     "node": ">=20.12"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "win32"
   ],
   "keywords": [
     "ai",
@@ -43,10 +44,13 @@
     "dropbox",
     "sync",
     "dotfiles",
-    "cli"
+    "cli",
+    "windows",
+    "macos"
   ],
   "dependencies": {
     "@clack/prompts": "^1.8.1",
+    "diff": "^9.0.0",
     "picocolors": "^1.1.1"
   }
 }
